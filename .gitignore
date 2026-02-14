@@ -1,0 +1,10 @@
+*
+!.gitignore
+!*.cpp
+!*.h
+!include/
+!include/**
+!gui/
+!gui/**
+!*.toml
+!*.png
