@@ -10,6 +10,83 @@ std::atomic<HGLRC> g_sharedMirrorContext{ nullptr };
 std::atomic<HDC> g_sharedContextDC{ nullptr };
 std::atomic<bool> g_sharedContextsReady{ false };
 
+// Use a dedicated hidden dummy window/DC for worker contexts.
+// Using the game's window HDC across multiple threads/contexts can trigger flicker/black frames on some drivers.
+static HWND g_sharedDummyHwnd = NULL;
+static HDC g_sharedDummyDC = NULL;
+
+static bool CreateSharedDummyWindowWithMatchingPixelFormat(HDC gameHdc) {
+    if (g_sharedDummyHwnd && g_sharedDummyDC) { return true; }
+    if (!gameHdc) { return false; }
+
+    // Get the game's pixel format.
+    int gamePf = GetPixelFormat(gameHdc);
+    if (gamePf == 0) {
+        Log("SharedContexts: GetPixelFormat(gameHdc) returned 0");
+        return false;
+    }
+
+    PIXELFORMATDESCRIPTOR gamePfd = {};
+    gamePfd.nSize = sizeof(gamePfd);
+    gamePfd.nVersion = 1;
+    if (DescribePixelFormat(gameHdc, gamePf, sizeof(gamePfd), &gamePfd) == 0) {
+        Log("SharedContexts: DescribePixelFormat(gameHdc) failed");
+        return false;
+    }
+
+    // Register a tiny hidden window class (once).
+    static ATOM s_atom = 0;
+    if (!s_atom) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.style = CS_OWNDC;
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.lpszClassName = L"ToolscreenSharedGLDummy";
+        s_atom = RegisterClassExW(&wc);
+        if (!s_atom) {
+            // Class might already exist (e.g. DLL reinjection) - try to continue.
+            DWORD err = GetLastError();
+            if (err != ERROR_CLASS_ALREADY_EXISTS) {
+                Log("SharedContexts: RegisterClassExW failed (error " + std::to_string(err) + ")");
+                return false;
+            }
+        }
+    }
+
+    g_sharedDummyHwnd = CreateWindowExW(0, L"ToolscreenSharedGLDummy", L"", WS_OVERLAPPED, 0, 0, 1, 1, NULL, NULL,
+                                        GetModuleHandleW(NULL), NULL);
+    if (!g_sharedDummyHwnd) {
+        Log("SharedContexts: CreateWindowExW(dummy) failed (error " + std::to_string(GetLastError()) + ")");
+        return false;
+    }
+
+    g_sharedDummyDC = GetDC(g_sharedDummyHwnd);
+    if (!g_sharedDummyDC) {
+        Log("SharedContexts: GetDC(dummy) failed");
+        DestroyWindow(g_sharedDummyHwnd);
+        g_sharedDummyHwnd = NULL;
+        return false;
+    }
+
+    // Try to set the exact same pixel format index.
+    if (!SetPixelFormat(g_sharedDummyDC, gamePf, &gamePfd)) {
+        // Fallback: choose closest pixel format based on the game's PFD.
+        int chosen = ChoosePixelFormat(g_sharedDummyDC, &gamePfd);
+        if (chosen == 0 || !SetPixelFormat(g_sharedDummyDC, chosen, &gamePfd)) {
+            Log("SharedContexts: Failed to SetPixelFormat(dummy) (error " + std::to_string(GetLastError()) + ")");
+            ReleaseDC(g_sharedDummyHwnd, g_sharedDummyDC);
+            DestroyWindow(g_sharedDummyHwnd);
+            g_sharedDummyDC = NULL;
+            g_sharedDummyHwnd = NULL;
+            return false;
+        }
+        Log("SharedContexts: Dummy DC pixel format differs from game (fallback chosen=" + std::to_string(chosen) + ")");
+    }
+
+    return true;
+}
+
 // Helper: temporarily unbind the current context so wglShareLists can succeed.
 // Per WGL docs, neither context may be current when calling wglShareLists.
 struct ScopedWglUnbind {
@@ -43,8 +120,18 @@ bool InitializeSharedContexts(void* gameGLContext, HDC hdc) {
 
     Log("SharedContexts: Initializing all shared contexts...");
 
-    // Store the DC for later use
-    g_sharedContextDC.store(hdc);
+    // Prefer a dedicated dummy window/DC for worker contexts.
+    // If this fails, fall back to using the game's DC (legacy behavior).
+    HDC contextHdc = hdc;
+    if (CreateSharedDummyWindowWithMatchingPixelFormat(hdc) && g_sharedDummyDC) {
+        contextHdc = g_sharedDummyDC;
+        Log("SharedContexts: Using dummy DC for worker contexts");
+    } else {
+        Log("SharedContexts: Using game DC for worker contexts (dummy DC unavailable)");
+    }
+
+    // Store the DC for later use by worker threads
+    g_sharedContextDC.store(contextHdc);
 
     // Preferred: Create contexts with WGL_ARB_create_context and share-at-create.
     // This is more reliable with modern Minecraft (1.21+) contexts (core profiles, newer versions).
@@ -70,8 +157,8 @@ bool InitializeSharedContexts(void* gameGLContext, HDC hdc) {
                           // If profileMask is 0 (unknown), request compatibility (most permissive).
                           WGL_CONTEXT_PROFILE_MASK_ARB, (profileMask != 0) ? profileMask : WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB, 0 };
 
-        renderContext = wglCreateContextAttribsARB(hdc, gameContext, attribs);
-        mirrorContext = wglCreateContextAttribsARB(hdc, gameContext, attribs);
+        renderContext = wglCreateContextAttribsARB(contextHdc, gameContext, attribs);
+        mirrorContext = wglCreateContextAttribsARB(contextHdc, gameContext, attribs);
         if (renderContext && mirrorContext) {
             Log("SharedContexts: Created shared contexts via wglCreateContextAttribsARB (" + std::to_string(major) + "." +
                 std::to_string(minor) + ")");
@@ -92,13 +179,13 @@ bool InitializeSharedContexts(void* gameGLContext, HDC hdc) {
 
     if (!renderContext || !mirrorContext) {
         // Fallback: Create legacy contexts then share.
-        renderContext = wglCreateContext(hdc);
+        renderContext = wglCreateContext(contextHdc);
         if (!renderContext) {
             Log("SharedContexts: Failed to create render context (error " + std::to_string(GetLastError()) + ")");
             return false;
         }
 
-        mirrorContext = wglCreateContext(hdc);
+        mirrorContext = wglCreateContext(contextHdc);
         if (!mirrorContext) {
             Log("SharedContexts: Failed to create mirror context (error " + std::to_string(GetLastError()) + ")");
             wglDeleteContext(renderContext);
@@ -162,6 +249,16 @@ void CleanupSharedContexts() {
     if (mirror) { wglDeleteContext(mirror); }
 
     g_sharedContextDC.store(nullptr);
+
+    // Cleanup dummy window/DC
+    if (g_sharedDummyHwnd && g_sharedDummyDC) {
+        ReleaseDC(g_sharedDummyHwnd, g_sharedDummyDC);
+        g_sharedDummyDC = NULL;
+    }
+    if (g_sharedDummyHwnd) {
+        DestroyWindow(g_sharedDummyHwnd);
+        g_sharedDummyHwnd = NULL;
+    }
     Log("SharedContexts: Cleaned up");
 }
 
