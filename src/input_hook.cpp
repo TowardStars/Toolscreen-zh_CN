@@ -364,9 +364,19 @@ InputHandlerResult HandleWindowOverlayMouse(HWND hWnd, UINT uMsg, WPARAM wParam,
     if (uMsg == WM_MOUSEWHEEL || uMsg == WM_MOUSEHWHEEL) {
         POINT cursorPos;
         GetCursorPos(&cursorPos);
-        // For fullscreen games, screen coords == client coords
-        mouseX = cursorPos.x;
-        mouseY = cursorPos.y;
+        // Convert to game window client coordinates.
+        // IMPORTANT: On multi-monitor systems, screen coordinates are VIRTUAL SCREEN coordinates,
+        // so (0,0) is not necessarily the top-left of the monitor the game is on.
+        // Client coords are always relative to the game window (0,0 at its top-left),
+        // which is the coordinate space used by our overlay hit-testing and forwarding.
+        if (ScreenToClient(hWnd, &cursorPos)) {
+            mouseX = cursorPos.x;
+            mouseY = cursorPos.y;
+        } else {
+            // Fallback: keep screen coords if conversion fails
+            mouseX = cursorPos.x;
+            mouseY = cursorPos.y;
+        }
     } else {
         // Other mouse messages use client coordinates directly
         mouseX = GET_X_LPARAM(lParam);

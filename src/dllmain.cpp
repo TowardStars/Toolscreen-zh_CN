@@ -812,12 +812,25 @@ BOOL WINAPI hkSetCursorPos(int X, int Y) {
 
     CapturingState currentState = g_capturingMousePos.load();
 
+    // IMPORTANT: SetCursorPos expects VIRTUAL SCREEN coordinates.
+    // Our mode viewport coordinates are computed relative to the game monitor's (0,0),
+    // so we must add the monitor's rcMonitor.left/top for multi-monitor setups.
     int centerX = viewport.stretchX + viewport.stretchWidth / 2;
     int centerY = viewport.stretchY + viewport.stretchHeight / 2;
+    int centerX_abs = centerX;
+    int centerY_abs = centerY;
+    if (isFull) {
+        RECT monRect{};
+        HWND hwnd = g_minecraftHwnd.load();
+        if (GetMonitorRectForWindow(hwnd, monRect)) {
+            centerX_abs = monRect.left + centerX;
+            centerY_abs = monRect.top + centerY;
+        }
+    }
 
     if (currentState == CapturingState::DISABLED) {
         if (isFull) {
-            g_nextMouseXY.store(std::make_pair(centerX, centerY));
+            g_nextMouseXY.store(std::make_pair(centerX_abs, centerY_abs));
         } else {
             g_nextMouseXY.store(std::make_pair(X, Y));
         }
