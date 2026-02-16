@@ -1076,6 +1076,22 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     RegisterBindingInputEvent(uMsg, wParam, lParam);
 
+    // Keep cached monitor dimensions in sync when the window is moved/resized across monitors.
+    // This must run even in windowed mode (HandleNonFullscreenCheck returns early).
+    switch (uMsg) {
+    case WM_MOVE:
+    case WM_MOVING:
+    case WM_SIZE:
+    case WM_SIZING:
+    case WM_WINDOWPOSCHANGED:
+    case WM_DPICHANGED:
+    case WM_DISPLAYCHANGE:
+        InvalidateCachedScreenMetrics();
+        break;
+    default:
+        break;
+    }
+
     InputHandlerResult result;
 
     // --- Phase 1: Early Processing ---

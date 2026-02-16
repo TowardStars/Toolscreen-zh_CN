@@ -53,6 +53,61 @@ static std::string s_previousGameStateForReset = "init";
 static std::atomic<int> s_cachedScreenWidth{ 0 };
 static std::atomic<int> s_cachedScreenHeight{ 0 };
 
+// Screen-metrics refresh coordination
+// - Dirty flag is set by window-move/resize messages to force immediate refresh.
+// - Periodic refresh is a safety net in case move messages are missed.
+// - If another thread detects a size change and updates the cache, it requests
+//   an expression-dimension recalculation which MUST occur on the logic thread.
+static std::atomic<bool> s_screenMetricsDirty{ true };
+static std::atomic<bool> s_screenMetricsRecalcRequested{ false };
+static std::atomic<ULONGLONG> s_lastScreenMetricsRefreshMs{ 0 };
+
+static void ComputeScreenMetricsForGameWindow(int& outW, int& outH) {
+    outW = 0;
+    outH = 0;
+
+    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (!GetMonitorSizeForWindow(hwnd, outW, outH)) {
+        // Fallback to primary monitor.
+        outW = GetSystemMetrics(SM_CXSCREEN);
+        outH = GetSystemMetrics(SM_CYSCREEN);
+    }
+}
+
+// Returns true if the cached width/height changed.
+static bool RefreshCachedScreenMetricsIfNeeded(bool requestRecalcOnChange) {
+    constexpr ULONGLONG kPeriodicRefreshMs = 250; // fast enough to catch monitor moves, cheap enough for render thread callers
+    ULONGLONG now = GetTickCount64();
+
+    bool forced = s_screenMetricsDirty.exchange(false, std::memory_order_relaxed);
+    ULONGLONG last = s_lastScreenMetricsRefreshMs.load(std::memory_order_relaxed);
+    bool periodic = (now - last) >= kPeriodicRefreshMs;
+
+    if (!forced && !periodic) { return false; }
+    s_lastScreenMetricsRefreshMs.store(now, std::memory_order_relaxed);
+
+    int newW = 0, newH = 0;
+    ComputeScreenMetricsForGameWindow(newW, newH);
+    if (newW <= 0 || newH <= 0) { return false; }
+
+    int prevW = s_cachedScreenWidth.load(std::memory_order_relaxed);
+    int prevH = s_cachedScreenHeight.load(std::memory_order_relaxed);
+
+    if (prevW != newW || prevH != newH) {
+        s_cachedScreenWidth.store(newW, std::memory_order_relaxed);
+        s_cachedScreenHeight.store(newH, std::memory_order_relaxed);
+
+        if (requestRecalcOnChange) { s_screenMetricsRecalcRequested.store(true, std::memory_order_relaxed); }
+        return true;
+    }
+
+    return false;
+}
+
+void InvalidateCachedScreenMetrics() {
+    s_screenMetricsDirty.store(true, std::memory_order_relaxed);
+}
+
 // Tracked for UpdateActiveMirrorConfigs - detect when active mirrors change
 static std::vector<std::string> s_lastActiveMirrorIds;
 
@@ -150,27 +205,21 @@ void UpdateActiveMirrorConfigs() {
 void UpdateCachedScreenMetrics() {
     PROFILE_SCOPE_CAT("LT Screen Metrics", "Logic Thread");
 
-    // Store previous values to detect changes
+    // Store previous values to detect changes.
+    // Note: other threads may refresh the cache (to avoid returning stale values),
+    // so we also honor an explicit "recalc requested" flag.
     int prevWidth = s_cachedScreenWidth.load(std::memory_order_relaxed);
     int prevHeight = s_cachedScreenHeight.load(std::memory_order_relaxed);
 
-    int newWidth = 0;
-    int newHeight = 0;
+    bool changed = RefreshCachedScreenMetricsIfNeeded(/*requestRecalcOnChange=*/false);
+    bool recalcRequested = s_screenMetricsRecalcRequested.exchange(false, std::memory_order_relaxed);
 
-    // Multi-monitor support: treat the "screen" as the monitor the game window is on.
-    // This keeps all fullscreen math correct even when Minecraft is fullscreen/borderless on a non-primary monitor.
-    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
-    if (!GetMonitorSizeForWindow(hwnd, newWidth, newHeight)) {
-        // Fallback to primary monitor.
-        newWidth = GetSystemMetrics(SM_CXSCREEN);
-        newHeight = GetSystemMetrics(SM_CYSCREEN);
-    }
+    int newWidth = s_cachedScreenWidth.load(std::memory_order_relaxed);
+    int newHeight = s_cachedScreenHeight.load(std::memory_order_relaxed);
 
-    s_cachedScreenWidth.store(newWidth, std::memory_order_relaxed);
-    s_cachedScreenHeight.store(newHeight, std::memory_order_relaxed);
-
-    // Recalculate expression-based dimensions if screen size changed
-    if (prevWidth != 0 && prevHeight != 0 && (prevWidth != newWidth || prevHeight != newHeight)) {
+    // Recalculate expression-based dimensions if screen size changed or if another thread requested it.
+    // Only do this when we already had non-zero values once (prevents doing work during early startup).
+    if (prevWidth != 0 && prevHeight != 0 && (changed || recalcRequested || prevWidth != newWidth || prevHeight != newHeight)) {
         RecalculateExpressionDimensions();
         // RecalculateExpressionDimensions mutates g_config.modes in-place (width/height/stretch fields).
         // Publish updated snapshot so reader threads see the recalculated dimensions.
@@ -179,27 +228,37 @@ void UpdateCachedScreenMetrics() {
 }
 
 int GetCachedScreenWidth() {
+    // Refresh opportunistically so we don't return stale monitor dimensions after a window move.
+    // This is throttled (see RefreshCachedScreenMetricsIfNeeded).
+    RefreshCachedScreenMetricsIfNeeded(/*requestRecalcOnChange=*/true);
+
     int w = s_cachedScreenWidth.load(std::memory_order_relaxed);
     if (w == 0) {
-        int h = 0;
-        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
-        if (!GetMonitorSizeForWindow(hwnd, w, h)) {
-            w = GetSystemMetrics(SM_CXSCREEN);
+        // Startup fallback if logic thread hasn't populated the cache yet.
+        int tmpW = 0, tmpH = 0;
+        ComputeScreenMetricsForGameWindow(tmpW, tmpH);
+        if (tmpW > 0) {
+            s_cachedScreenWidth.store(tmpW, std::memory_order_relaxed);
+            s_cachedScreenHeight.store(tmpH, std::memory_order_relaxed);
+            w = tmpW;
         }
-        s_cachedScreenWidth.store(w, std::memory_order_relaxed);
     }
     return w;
 }
 
 int GetCachedScreenHeight() {
+    RefreshCachedScreenMetricsIfNeeded(/*requestRecalcOnChange=*/true);
+
     int h = s_cachedScreenHeight.load(std::memory_order_relaxed);
     if (h == 0) {
-        int w = 0;
-        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
-        if (!GetMonitorSizeForWindow(hwnd, w, h)) {
-            h = GetSystemMetrics(SM_CYSCREEN);
+        // Startup fallback if logic thread hasn't populated the cache yet.
+        int tmpW = 0, tmpH = 0;
+        ComputeScreenMetricsForGameWindow(tmpW, tmpH);
+        if (tmpH > 0) {
+            s_cachedScreenWidth.store(tmpW, std::memory_order_relaxed);
+            s_cachedScreenHeight.store(tmpH, std::memory_order_relaxed);
+            h = tmpH;
         }
-        s_cachedScreenHeight.store(h, std::memory_order_relaxed);
     }
     return h;
 }

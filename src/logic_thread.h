@@ -61,7 +61,11 @@ void ProcessPendingModeSwitch();
 // This handles the automatic mode reset when leaving a world
 void CheckGameStateReset();
 
-// Returns cached primary monitor dimensions, updated at ~60Hz by logic thread
+// Returns cached monitor dimensions for the monitor the game window is currently on (multi-monitor aware)
 // Safe to call from any thread without locking
 int GetCachedScreenWidth();
 int GetCachedScreenHeight();
+
+// Marks cached screen metrics as dirty so the next refresh re-queries the monitor
+// the game window is currently on. Safe to call from any thread.
+void InvalidateCachedScreenMetrics();
