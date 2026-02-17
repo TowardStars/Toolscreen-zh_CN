@@ -918,7 +918,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     return { false, 0 };
 }
 
-InputHandlerResult HandleMouseCoordinateTranslation(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+InputHandlerResult HandleMouseCoordinateTranslation(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
     PROFILE_SCOPE("HandleMouseCoordinateTranslation");
 
     if (uMsg < WM_MOUSEFIRST || uMsg > WM_MOUSELAST) { return { false, 0 }; }
@@ -933,7 +933,9 @@ InputHandlerResult HandleMouseCoordinateTranslation(HWND hWnd, UINT uMsg, WPARAM
     int newX = static_cast<int>((relativeX / geo.stretchWidth) * geo.width);
     int newY = static_cast<int>((relativeY / geo.stretchHeight) * geo.height);
 
-    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, MAKELPARAM(newX, newY)) };
+    // Update coordinates in-place, don't consume the input, we still need rebind to work with mouse hotkeys
+    lParam = MAKELPARAM(newX, newY);
+    return { false, 0 };
 }
 
 static UINT GetScanCodeWithExtendedFlag(DWORD vkCode) {
@@ -1022,6 +1024,29 @@ static bool TryTranslateVkToChar(DWORD vkCode, bool shiftDown, WCHAR& outChar) {
 
     if (translated < 0) {
         // Dead key state cleanup
+        BYTE emptyState[256] = {};
+        WCHAR clearBuffer[8] = {};
+        ToUnicodeEx(static_cast<UINT>(vkCode), scanCode, emptyState, clearBuffer, 8, 0, keyboardLayout);
+    }
+
+    return false;
+}
+
+static bool TryTranslateVkToCharWithKeyboardState(DWORD vkCode, const BYTE keyboardState[256], WCHAR& outChar) {
+    HKL keyboardLayout = GetKeyboardLayout(0);
+    UINT scanCode = GetScanCodeWithExtendedFlag(vkCode) & 0xFF;
+
+    WCHAR utf16Buffer[8] = {};
+    BYTE ksCopy[256] = {};
+    memcpy(ksCopy, keyboardState, 256);
+
+    int translated = ToUnicodeEx(static_cast<UINT>(vkCode), scanCode, ksCopy, utf16Buffer, 8, 0, keyboardLayout);
+    if (translated == 1) {
+        outChar = utf16Buffer[0];
+        return outChar != 0;
+    }
+
+    if (translated < 0) {
         BYTE emptyState[256] = {};
         WCHAR clearBuffer[8] = {};
         ToUnicodeEx(static_cast<UINT>(vkCode), scanCode, emptyState, clearBuffer, 8, 0, keyboardLayout);
@@ -1209,6 +1234,12 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
             LPARAM newLParam =
                 BuildKeyboardMessageLParam(outputScanCode, isKeyDown, isSystemKeyMsg, repeatCount, previousState, transitionState);
+
+            if (isMouseButton) {
+                PostMessage(hWnd, outputMsg, static_cast<WPARAM>(outputVK), newLParam);
+                return { true, 0 };
+            }
+
             return { true, CallWindowProc(g_originalWndProc, hWnd, outputMsg, outputVK, newLParam) };
         }
     }
