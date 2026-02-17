@@ -2780,8 +2780,50 @@ std::atomic<bool> g_configurePromptDismissedThisSession{ false };
 void RenderWelcomeToast(bool isFullscreen) {
     // Semantics:
     // - toast1 (windowed fullscreenPrompt) should ALWAYS show in windowed mode.
-    // - toast2 (fullscreen configurePrompt) should ALWAYS show in fullscreen UNTIL Ctrl+I is pressed for this session.
+    // - toast2 (fullscreen configurePrompt) should show in fullscreen UNTIL Ctrl+I is pressed for this session,
+    //   but it now auto-fades out after a short timeout.
     if (isFullscreen && g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) { return; }
+
+    // toast2 fade-out timing (fullscreen only)
+    // Hold fully opaque for N seconds, then fade out over M seconds.
+    // Reset timer whenever we ENTER fullscreen.
+    static bool s_prevFullscreen = false;
+    static std::chrono::steady_clock::time_point s_toast2StartTime{};
+    static bool s_toast2FinishedThisFullscreen = false;
+
+    if (isFullscreen && !s_prevFullscreen) {
+        s_toast2StartTime = std::chrono::steady_clock::now();
+        s_toast2FinishedThisFullscreen = false;
+    }
+    if (!isFullscreen) {
+        // Allow toast2 to show again on the next fullscreen entry.
+        s_toast2FinishedThisFullscreen = false;
+    }
+    s_prevFullscreen = isFullscreen;
+
+    float toastOpacity = 1.0f;
+    if (isFullscreen) {
+        // If we've already faded out completely during this fullscreen entry, skip rendering.
+        if (s_toast2FinishedThisFullscreen) { return; }
+
+        constexpr float kToast2HoldSeconds = 10.0f;
+        constexpr float kToast2FadeSeconds = 1.5f;
+
+        const auto now = std::chrono::steady_clock::now();
+        const float elapsed = std::chrono::duration_cast<std::chrono::duration<float>>(now - s_toast2StartTime).count();
+
+        if (elapsed <= kToast2HoldSeconds) {
+            toastOpacity = 1.0f;
+        } else {
+            const float t = (elapsed - kToast2HoldSeconds) / kToast2FadeSeconds;
+            const float clamped = (t < 0.0f) ? 0.0f : (t > 1.0f ? 1.0f : t);
+            toastOpacity = 1.0f - clamped;
+            if (toastOpacity <= 0.0f) {
+                s_toast2FinishedThisFullscreen = true;
+                return;
+            }
+        }
+    }
 
     // Core-profile-safe rendering (Minecraft 1.17+): use shaders + VAO/VBO.
     static GLuint s_program = 0;
@@ -2990,7 +3032,8 @@ void main() {
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glUniform1f(s_locOpacity, 1.0f);
+    // Apply opacity (toast2 fades out; toast1 remains fully opaque).
+    glUniform1f(s_locOpacity, toastOpacity);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
     // Restore state

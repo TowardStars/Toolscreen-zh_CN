@@ -30,7 +30,7 @@ if (ImGui::BeginTabItem("Settings")) {
 /*    if (ImGui::Checkbox("Disable Fullscreen Prompt", &g_config.disableFullscreenPrompt)) { g_configIsDirty = true; }
     ImGui::SameLine();
     HelpMarker("Disables the fullscreen toast prompt (toast2).\n"
-               "When disabled, toast2 appears in fullscreen and fades out after 3 seconds.");
+               "When disabled, toast2 appears in fullscreen and starts fading out after 10 seconds.");
 
     if (ImGui::Checkbox("Disable Configure Prompt", &g_config.disableConfigurePrompt)) { g_configIsDirty = true; }
     ImGui::SameLine();
