@@ -71,6 +71,32 @@ static void EnsureSystemCursorHidden() {
     ShowCursor(FALSE);
 }
 
+static DWORD NormalizeModifierVkFromKeyMessage(DWORD rawVk, LPARAM lParam) {
+    DWORD vk = rawVk;
+
+    const UINT scanCode = static_cast<UINT>((lParam >> 16) & 0xFF);
+    const bool isExtended = (lParam & (1LL << 24)) != 0;
+
+    if (vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT) {
+        if (scanCode != 0) {
+            DWORD mapped = static_cast<DWORD>(::MapVirtualKeyW(scanCode, MAPVK_VSC_TO_VK_EX));
+            if (mapped == VK_LSHIFT || mapped == VK_RSHIFT) {
+                vk = mapped;
+            }
+        }
+        return vk;
+    }
+
+    if (vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL) {
+        return isExtended ? VK_RCONTROL : VK_LCONTROL;
+    }
+    if (vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU) {
+        return isExtended ? VK_RMENU : VK_LMENU;
+    }
+
+    return vk;
+}
+
 InputHandlerResult HandleMouseMoveViewportOffset(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
     PROFILE_SCOPE("HandleMouseMoveViewportOffset");
 
@@ -264,16 +290,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     case WM_SYSKEYDOWN: {
         vkCode = static_cast<DWORD>(wParam);
         isEscape = (wParam == VK_ESCAPE);
-
-        // Normalize generic modifier VKs to left/right variants.
-        if (vkCode == VK_SHIFT) {
-            DWORD mapped = static_cast<DWORD>(::MapVirtualKeyW((UINT)((lParam >> 16) & 0xff), MAPVK_VSC_TO_VK_EX));
-            if (mapped != 0) vkCode = mapped;
-        } else if (vkCode == VK_CONTROL) {
-            vkCode = (HIWORD(lParam) & KF_EXTENDED) ? VK_RCONTROL : VK_LCONTROL;
-        } else if (vkCode == VK_MENU) {
-            vkCode = (HIWORD(lParam) & KF_EXTENDED) ? VK_RMENU : VK_LMENU;
-        }
+        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
         break;
     }
     case WM_LBUTTONDOWN:
@@ -610,17 +627,11 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         return { false, 0 };
     }
 
-    // Normalize generic modifier VKs to left/right variants (needed for RSHIFT/RCTRL/RALT, etc.).
+    // Normalize modifier VKs to left/right variants (needed for RSHIFT/RCTRL/RALT, etc.).
     // This mirrors imgui_impl_win32 behavior and enables reliable hotkeys + key rebinding.
     vkCode = rawVkCode;
     if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
-        if (vkCode == VK_SHIFT) {
-            vkCode = static_cast<DWORD>(::MapVirtualKeyW((UINT)((lParam >> 16) & 0xff), MAPVK_VSC_TO_VK_EX));
-        } else if (vkCode == VK_CONTROL) {
-            vkCode = (HIWORD(lParam) & KF_EXTENDED) ? VK_RCONTROL : VK_LCONTROL;
-        } else if (vkCode == VK_MENU) {
-            vkCode = (HIWORD(lParam) & KF_EXTENDED) ? VK_RMENU : VK_LMENU;
-        }
+        vkCode = NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);
         if (vkCode == 0) vkCode = rawVkCode;
     }
 
@@ -918,7 +929,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     return { false, 0 };
 }
 
-InputHandlerResult HandleMouseCoordinateTranslation(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
+InputHandlerResult HandleMouseCoordinateTranslationPhase(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
     PROFILE_SCOPE("HandleMouseCoordinateTranslation");
 
     if (uMsg < WM_MOUSEFIRST || uMsg > WM_MOUSELAST) { return { false, 0 }; }
@@ -1108,16 +1119,9 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         return { false, 0 };
     }
 
-    // Normalize generic modifier VKs to left/right variants so rebinds like VK_RSHIFT work.
     vkCode = rawVkCode;
     if (!isMouseButton && (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP)) {
-        if (vkCode == VK_SHIFT) {
-            vkCode = static_cast<DWORD>(::MapVirtualKeyW((UINT)((lParam >> 16) & 0xff), MAPVK_VSC_TO_VK_EX));
-        } else if (vkCode == VK_CONTROL) {
-            vkCode = (HIWORD(lParam) & KF_EXTENDED) ? VK_RCONTROL : VK_LCONTROL;
-        } else if (vkCode == VK_MENU) {
-            vkCode = (HIWORD(lParam) & KF_EXTENDED) ? VK_RMENU : VK_LMENU;
-        }
+        vkCode = NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);
         if (vkCode == 0) vkCode = rawVkCode;
     }
 
@@ -1129,7 +1133,6 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         if (fromKey == 0) return false;
         if (incomingVk == fromKey) return true;
 
-        // Allow generic modifiers to match either left/right variant.
         if (fromKey == VK_CONTROL) {
             return incomingVk == VK_LCONTROL || incomingVk == VK_RCONTROL || incomingRawVk == VK_CONTROL;
         }
@@ -1140,10 +1143,9 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
             return incomingVk == VK_LMENU || incomingVk == VK_RMENU || incomingRawVk == VK_MENU;
         }
 
-        // Also allow left/right modifier bindings to match generic incoming VK_*.
-        if (incomingRawVk == VK_CONTROL && (fromKey == VK_LCONTROL || fromKey == VK_RCONTROL)) return true;
-        if (incomingRawVk == VK_SHIFT && (fromKey == VK_LSHIFT || fromKey == VK_RSHIFT)) return true;
-        if (incomingRawVk == VK_MENU && (fromKey == VK_LMENU || fromKey == VK_RMENU)) return true;
+        if (incomingRawVk == VK_CONTROL && incomingVk == VK_CONTROL && (fromKey == VK_LCONTROL || fromKey == VK_RCONTROL)) return true;
+        if (incomingRawVk == VK_SHIFT && incomingVk == VK_SHIFT && (fromKey == VK_LSHIFT || fromKey == VK_RSHIFT)) return true;
+        if (incomingRawVk == VK_MENU && incomingVk == VK_MENU && (fromKey == VK_LMENU || fromKey == VK_RMENU)) return true;
 
         return false;
     };
@@ -1240,7 +1242,56 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                 return { true, 0 };
             }
 
-            return { true, CallWindowProc(g_originalWndProc, hWnd, outputMsg, outputVK, newLParam) };
+            LRESULT keyResult = CallWindowProc(g_originalWndProc, hWnd, outputMsg, outputVK, newLParam);
+
+            auto isModifierVk = [](DWORD vk) {
+                return vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+                       vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU;
+            };
+
+            const bool fromKeyIsNonChar = isModifierVk(rebind.fromKey) || rebind.fromKey == VK_LWIN || rebind.fromKey == VK_RWIN ||
+                                          (rebind.fromKey >= VK_F1 && rebind.fromKey <= VK_F24);
+
+            if (isKeyDown && fromKeyIsNonChar) {
+                WCHAR outChar = 0;
+
+                // Some control keys should always generate WM_CHAR for expected text/edit behavior.
+                if (outputVK == VK_RETURN) {
+                    outChar = L'\r';
+                } else if (outputVK == VK_TAB) {
+                    outChar = L'\t';
+                } else if (outputVK == VK_BACK) {
+                    outChar = L'\b';
+                } else {
+                    BYTE ks[256] = {};
+                    if (GetKeyboardState(ks)) {
+                        // If the source key is a modifier that we're consuming, clear it from the keyboard state
+                        // so it doesn't accidentally affect character translation (e.g. Shift -> capital letters).
+                        if (rebind.fromKey == VK_SHIFT || rebind.fromKey == VK_LSHIFT || rebind.fromKey == VK_RSHIFT) {
+                            ks[VK_SHIFT] = 0;
+                            ks[VK_LSHIFT] = 0;
+                            ks[VK_RSHIFT] = 0;
+                        } else if (rebind.fromKey == VK_CONTROL || rebind.fromKey == VK_LCONTROL || rebind.fromKey == VK_RCONTROL) {
+                            ks[VK_CONTROL] = 0;
+                            ks[VK_LCONTROL] = 0;
+                            ks[VK_RCONTROL] = 0;
+                        } else if (rebind.fromKey == VK_MENU || rebind.fromKey == VK_LMENU || rebind.fromKey == VK_RMENU) {
+                            ks[VK_MENU] = 0;
+                            ks[VK_LMENU] = 0;
+                            ks[VK_RMENU] = 0;
+                        }
+
+                        (void)TryTranslateVkToCharWithKeyboardState(outputVK, ks, outChar);
+                    }
+                }
+
+                if (outChar != 0) {
+                    const UINT charMsg = isSystemKeyMsg ? WM_SYSCHAR : WM_CHAR;
+                    CallWindowProc(g_originalWndProc, hWnd, charMsg, static_cast<WPARAM>(outChar), newLParam);
+                }
+            }
+
+            return { true, keyResult };
         }
     }
     return { false, 0 };
@@ -1390,7 +1441,7 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (result.consumed) return result.result;
 
     // --- Phase 10: Mouse Coordinate Translation ---
-    result = HandleMouseCoordinateTranslation(hWnd, uMsg, wParam, lParam);
+    result = HandleMouseCoordinateTranslationPhase(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
     // --- Phase 11: Key Rebinding ---

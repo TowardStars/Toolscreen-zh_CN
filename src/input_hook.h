@@ -68,7 +68,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                                  const std::string& gameState);
 
 // Handle mouse coordinate translation
-InputHandlerResult HandleMouseCoordinateTranslation(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM &lParam);
+InputHandlerResult HandleMouseCoordinateTranslationPhase(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam);
 
 // Handle key rebinding for WM_KEYDOWN/WM_KEYUP
 InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
