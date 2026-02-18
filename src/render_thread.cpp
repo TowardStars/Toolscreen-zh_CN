@@ -3510,17 +3510,26 @@ static void RenderThreadFunc(void* gameGLContext) {
                         float centerY = zoomY + zoomOutputHeight / 2.0f;
 
                         ImDrawList* drawList = request.shouldRenderGui ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
-                        // Auto-scale font size down based on the current box size.
-                        // Even though overlayWidth only changes how many boxes are drawn, users often adjust these settings together;
-                        // scaling by box size ensures the numbers always fit.
+                        // Font sizing:
+                        // - autoFontSize=true: auto-fit down to box size (keeps numbers inside the boxes)
+                        // - autoFontSize=false: manual override, bypass all auto-fit clamps
                         float requestedFontSize = (float)zoomConfig.textFontSize;
-                        float boxHeight = zoomConfig.linkRectToFont ? (requestedFontSize * 1.2f) : (float)zoomConfig.rectHeight;
-                        float maxFontByWidth = pixelWidthOnScreen * 0.85f; // leave some horizontal padding
-                        float maxFontByHeight = boxHeight * 0.80f;          // leave some vertical padding
+                        if (requestedFontSize < 1.0f) requestedFontSize = 1.0f;
+
                         float fontSize = requestedFontSize;
-                        if (maxFontByWidth > 0.0f) fontSize = (std::min)(fontSize, maxFontByWidth);
-                        if (maxFontByHeight > 0.0f) fontSize = (std::min)(fontSize, maxFontByHeight);
-                        if (fontSize < 6.0f) fontSize = 6.0f;
+                        if (zoomConfig.autoFontSize) {
+                            // Auto-scale font size down based on the current box size.
+                            // Even though overlayWidth only changes how many boxes are drawn, users often adjust these settings together;
+                            // scaling by box size ensures the numbers always fit.
+                            float boxHeight = zoomConfig.linkRectToFont ? (requestedFontSize * 1.2f) : (float)zoomConfig.rectHeight;
+                            // Note: padding factors intentionally leave headroom so digits don't touch borders.
+                            // Slightly relaxed to avoid the auto-fit looking too small.
+                            float maxFontByWidth = pixelWidthOnScreen * 0.90f; // leave some horizontal padding
+                            float maxFontByHeight = boxHeight * 0.85f;          // leave some vertical padding
+                            if (maxFontByWidth > 0.0f) fontSize = (std::min)(fontSize, maxFontByWidth);
+                            if (maxFontByHeight > 0.0f) fontSize = (std::min)(fontSize, maxFontByHeight);
+                            if (fontSize < 6.0f) fontSize = 6.0f;
+                        }
                         // Combine textColorOpacity with the fade opacity
                         float finalTextAlpha = zoomConfig.textColorOpacity * request.eyeZoomFadeOpacity;
                         ImU32 textColor =
@@ -3540,13 +3549,16 @@ static void RenderThreadFunc(void* gameGLContext) {
                             std::string text = std::to_string(displayNumber);
 
                             // Shrink further for multi-digit numbers if needed to fit inside a single box.
+                            // (Auto mode only; manual override intentionally bypasses all fit limits.)
                             float finalFontSize = fontSize;
                             ImVec2 textSize = font->CalcTextSizeA(finalFontSize, FLT_MAX, 0.0f, text.c_str());
-                            float maxTextWidth = pixelWidthOnScreen * 0.90f;
-                            if (maxTextWidth > 0.0f && textSize.x > maxTextWidth && textSize.x > 0.0f) {
-                                float scale = maxTextWidth / textSize.x;
-                                finalFontSize = (std::max)(6.0f, finalFontSize * scale);
-                                textSize = font->CalcTextSizeA(finalFontSize, FLT_MAX, 0.0f, text.c_str());
+                            if (zoomConfig.autoFontSize) {
+                                float maxTextWidth = pixelWidthOnScreen * 0.94f;
+                                if (maxTextWidth > 0.0f && textSize.x > maxTextWidth && textSize.x > 0.0f) {
+                                    float scale = maxTextWidth / textSize.x;
+                                    finalFontSize = (std::max)(6.0f, finalFontSize * scale);
+                                    textSize = font->CalcTextSizeA(finalFontSize, FLT_MAX, 0.0f, text.c_str());
+                                }
                             }
                             float numberCenterX = boxLeft + pixelWidthOnScreen / 2.0f;
                             float numberCenterY = centerY;

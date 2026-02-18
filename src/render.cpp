@@ -3216,9 +3216,8 @@ void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, 
 
 // Update overlay text font size dynamically
 void SetOverlayTextFontSize(int sizePixels) {
-    // Clamp to reasonable range
-    if (sizePixels < 8) sizePixels = 8;
-    if (sizePixels > 80) sizePixels = 80;
+    if (sizePixels < 1) sizePixels = 1;
+    if (sizePixels > 512) sizePixels = 512;
     g_overlayTextFontSize = static_cast<float>(sizePixels);
 }
 

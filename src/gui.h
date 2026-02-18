@@ -402,7 +402,10 @@ struct EyeZoomConfig {
     int windowHeight = 16384;
     int horizontalMargin = 0;   // Horizontal margin on both sides of the eyezoom stretch output
     int verticalMargin = 0;     // Vertical margin on top and bottom of the eyezoom stretch output
-    int textFontSize = 24;      // Font size for text labels in pixels (range: 8-80 pixels)
+    // When autoFontSize=true, the renderer will auto-fit the text to the current box size.
+    // When autoFontSize=false, textFontSize is used as-is and bypasses auto-fit clamps.
+    bool autoFontSize = true;
+    int textFontSize = 24;      // Manual font size override for text labels in pixels
     std::string textFontPath;   // Custom font path for EyeZoom text (empty = use global fontPath)
     int rectHeight = 24;        // Height of colored overlay rectangles in pixels (linked to textFontSize by default)
     bool linkRectToFont = true; // If true, rectHeight scales with textFontSize (rectHeight = textFontSize * 1.2)

@@ -377,7 +377,7 @@
                 int maxCloneHeight = mode.height;
                 if (Spinner("##EyeZoomCloneHeight", &g_config.eyezoom.cloneHeight, 10, 1, maxCloneHeight)) g_configIsDirty = true;
                 ImGui::NextColumn();
-                ImGui::Text("Overlay Width (per side)");
+                ImGui::Text("Overlay Pixels");
                 ImGui::NextColumn();
                 {
                     int maxOverlay = g_config.eyezoom.cloneWidth / 2;
@@ -459,11 +459,25 @@
 
                 ImGui::Separator();
                 ImGui::Text("Text Settings");
-                ImGui::SetNextItemWidth(250);
-                if (ImGui::SliderInt("Text Font Size (px)", &g_config.eyezoom.textFontSize, 8, 80)) {
+                if (ImGui::Checkbox("Auto Font Size", &g_config.eyezoom.autoFontSize)) {
                     g_configIsDirty = true;
-                    // Apply font size immediately
-                    SetOverlayTextFontSize(g_config.eyezoom.textFontSize);
+                }
+                ImGui::SameLine();
+                HelpMarker("When enabled, EyeZoom label text is auto-fit to the current box size.\n"
+                           "Disable to manually override the font size (no auto-fit limits).");
+
+                if (!g_config.eyezoom.autoFontSize) {
+                    ImGui::SetNextItemWidth(250);
+                    if (ImGui::SliderInt("Text Font Size (px)", &g_config.eyezoom.textFontSize, 1, 96)) {
+                        g_configIsDirty = true;
+                        // Apply size immediately (used by some non-RT calculations like linked rectangle height).
+                        SetOverlayTextFontSize(g_config.eyezoom.textFontSize);
+                    }
+                } else {
+                    ImGui::TextDisabled("Font size will be clamped to fit inside the overlay boxes.");
+                    if (g_config.eyezoom.linkRectToFont) {
+                        ImGui::TextDisabled("Note: With 'Link Rectangle to Font Size' enabled, box height is still based on Text Font Size.");
+                    }
                 }
 
                 ImGui::Text("Text Font:");
@@ -1172,6 +1186,35 @@
                     ImGui::TreePop();
                 }
 
+                // Window Overlays
+                if (ImGui::TreeNode("Window Overlays##Thin")) {
+                    int windowOverlay_idx_to_remove = -1;
+                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
+                        ImGui::PushID(static_cast<int>(k));
+                        if (ImGui::Button("X##del_window_overlay")) { windowOverlay_idx_to_remove = (int)k; }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
+                        ImGui::PopID();
+                    }
+                    if (windowOverlay_idx_to_remove != -1) {
+                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + windowOverlay_idx_to_remove);
+                        g_configIsDirty = true;
+                    }
+                    if (ImGui::BeginCombo("Add Window Overlay##add_window_overlay_to_thin", "[Select Window Overlay]")) {
+                        for (const auto& overlayConf : g_config.windowOverlays) {
+                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
+                                mode.windowOverlayIds.end()) {
+                                if (ImGui::Selectable(overlayConf.name.c_str())) {
+                                    mode.windowOverlayIds.push_back(overlayConf.name);
+                                    g_configIsDirty = true;
+                                }
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::TreePop();
+                }
+
                 // --- SENSITIVITY OVERRIDE ---
                 if (ImGui::TreeNode("Sensitivity Override##Thin")) {
                     if (ImGui::Checkbox("Override Sensitivity##Thin", &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
@@ -1504,6 +1547,35 @@
                             if (std::find(mode.imageIds.begin(), mode.imageIds.end(), imgConf.name) == mode.imageIds.end()) {
                                 if (ImGui::Selectable(imgConf.name.c_str())) {
                                     mode.imageIds.push_back(imgConf.name);
+                                    g_configIsDirty = true;
+                                }
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::TreePop();
+                }
+
+                // Window Overlays
+                if (ImGui::TreeNode("Window Overlays##Wide")) {
+                    int windowOverlay_idx_to_remove = -1;
+                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
+                        ImGui::PushID(static_cast<int>(k));
+                        if (ImGui::Button("X##del_window_overlay")) { windowOverlay_idx_to_remove = (int)k; }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
+                        ImGui::PopID();
+                    }
+                    if (windowOverlay_idx_to_remove != -1) {
+                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + windowOverlay_idx_to_remove);
+                        g_configIsDirty = true;
+                    }
+                    if (ImGui::BeginCombo("Add Window Overlay##add_window_overlay_to_wide", "[Select Window Overlay]")) {
+                        for (const auto& overlayConf : g_config.windowOverlays) {
+                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
+                                mode.windowOverlayIds.end()) {
+                                if (ImGui::Selectable(overlayConf.name.c_str())) {
+                                    mode.windowOverlayIds.push_back(overlayConf.name);
                                     g_configIsDirty = true;
                                 }
                             }

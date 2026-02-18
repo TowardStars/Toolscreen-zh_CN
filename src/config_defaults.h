@@ -195,6 +195,7 @@ constexpr int EYEZOOM_WINDOW_WIDTH = 384;
 constexpr int EYEZOOM_WINDOW_HEIGHT = 16384;
 constexpr int EYEZOOM_HORIZONTAL_MARGIN = 0;
 constexpr int EYEZOOM_VERTICAL_MARGIN = 0;
+constexpr bool EYEZOOM_AUTO_FONT_SIZE = true;
 constexpr int EYEZOOM_TEXT_FONT_SIZE = 24;
 inline const std::string EYEZOOM_TEXT_FONT_PATH = ""; // Empty = use global fontPath
 constexpr int EYEZOOM_RECT_HEIGHT = 24;

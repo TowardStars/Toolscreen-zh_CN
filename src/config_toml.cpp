@@ -1246,6 +1246,7 @@ void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("windowHeight", cfg.windowHeight);
     out.insert("horizontalMargin", cfg.horizontalMargin);
     out.insert("verticalMargin", cfg.verticalMargin);
+    out.insert("autoFontSize", cfg.autoFontSize);
     out.insert("textFontSize", cfg.textFontSize);
     out.insert("textFontPath", cfg.textFontPath);
     out.insert("rectHeight", cfg.rectHeight);
@@ -1287,6 +1288,7 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
     cfg.windowHeight = GetOr(tbl, "windowHeight", ConfigDefaults::EYEZOOM_WINDOW_HEIGHT);
     cfg.horizontalMargin = GetOr(tbl, "horizontalMargin", ConfigDefaults::EYEZOOM_HORIZONTAL_MARGIN);
     cfg.verticalMargin = GetOr(tbl, "verticalMargin", ConfigDefaults::EYEZOOM_VERTICAL_MARGIN);
+    cfg.autoFontSize = GetOr(tbl, "autoFontSize", ConfigDefaults::EYEZOOM_AUTO_FONT_SIZE);
     cfg.textFontSize = GetOr(tbl, "textFontSize", ConfigDefaults::EYEZOOM_TEXT_FONT_SIZE);
     cfg.textFontPath = GetStringOr(tbl, "textFontPath", ConfigDefaults::EYEZOOM_TEXT_FONT_PATH);
     cfg.rectHeight = GetOr(tbl, "rectHeight", ConfigDefaults::EYEZOOM_RECT_HEIGHT);
@@ -2081,7 +2083,7 @@ EyeZoomConfig GetDefaultEyeZoomConfigFromEmbedded() {
         int screenWidth = GetCachedScreenWidth();
         int screenHeight = GetCachedScreenHeight();
 
-        int horizontalMargin = ((screenWidth / 2) - (384 / 2)) / 10;
+        int horizontalMargin = ((screenWidth / 2) - (384 / 2)) / 20;
         int verticalMargin = (screenHeight / 2) / 4;
 
         eyezoom.horizontalMargin = horizontalMargin;
