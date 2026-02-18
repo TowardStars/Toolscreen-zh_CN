@@ -314,6 +314,20 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     // Escape always toggles GUI (with additional guards below). Otherwise, require the configured GUI hotkey.
     if (!isEscape && !CheckHotkeyMatch(g_config.guiHotkey, vkCode)) { return { false, 0 }; }
 
+    // If the GUI is already open, never allow a mouse-button GUI hotkey to close it.
+    // Otherwise, binding the GUI hotkey to a mouse button can make the UI effectively unusable.
+    if (g_showGui.load(std::memory_order_acquire) && !isEscape) {
+        switch (uMsg) {
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+        case WM_MBUTTONDOWN:
+        case WM_XBUTTONDOWN:
+            return { false, 0 };
+        default:
+            break;
+        }
+    }
+
     bool allow_toggle = true;
     if (isEscape && !g_showGui.load()) { allow_toggle = false; }
 
@@ -414,6 +428,10 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("HandleBorderlessToggle");
 
+    // Never trigger gameplay hotkeys while the settings GUI is open.
+    // These handlers run before ImGui input is processed, so consuming mouse clicks here would break the UI.
+    if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
+
     // Disabled/unbound
     if (g_config.borderlessHotkey.empty()) { return { false, 0 }; }
 
@@ -462,6 +480,10 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
 InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("HandleImageOverlaysToggle");
+
+    // Never trigger gameplay hotkeys while the settings GUI is open.
+    // This prevents mouse-bound hotkeys from eating clicks intended for the UI.
+    if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
 
     // Disabled/unbound
     if (g_config.imageOverlaysHotkey.empty()) { return { false, 0 }; }
@@ -513,6 +535,10 @@ InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam
 
 InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("HandleWindowOverlaysToggle");
+
+    // Never trigger gameplay hotkeys while the settings GUI is open.
+    // This prevents mouse-bound hotkeys from eating clicks intended for the UI.
+    if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
 
     // Disabled/unbound
     if (g_config.windowOverlaysHotkey.empty()) { return { false, 0 }; }
@@ -1278,6 +1304,11 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     } else {
         return { false, 0 };
     }
+
+    // If the config GUI is open, never apply mouse-button rebinds.
+    // Rebinding mouse buttons while the GUI is open can steal clicks and make the UI hard/impossible to use.
+    // Keyboard rebinds are still allowed (for text fields, etc.), and UI key-binding uses a separate capture path.
+    if (isMouseButton && g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
 
     vkCode = rawVkCode;
     if (!isMouseButton && (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP)) {

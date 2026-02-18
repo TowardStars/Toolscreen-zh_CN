@@ -2434,38 +2434,15 @@ void RenderSettingsGUI() {
     if (ImGui::BeginPopupModal("Bind Hotkey", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
         ImGui::Text("Press a key or key combination.");
         ImGui::Text("Release all keys to confirm.");
+        ImGui::Text("Press Backspace/Delete to clear.");
         ImGui::Text("Press ESC to cancel.");
         ImGui::Separator();
 
         static uint64_t s_lastBindingInputSeqHotkeyBind = 0;
         if (ImGui::IsWindowAppearing()) { s_lastBindingInputSeqHotkeyBind = GetLatestBindingInputSequence(); }
 
-        // Check for escape to cancel (event-based, no polling)
-        DWORD capturedVkCancel = 0;
-        LPARAM capturedLParamCancel = 0;
-        bool capturedIsMouseCancel = false;
-        if (ConsumeBindingInputEventSince(s_lastBindingInputSeqHotkeyBind, capturedVkCancel, capturedLParamCancel, capturedIsMouseCancel) &&
-            capturedVkCancel == VK_ESCAPE) {
-            Log("Binding cancelled from Escape key.");
-            s_mainHotkeyToBind = -1;
-            s_sensHotkeyToBind = -1;
-            s_exclusionToBind = { -1, -1 };
-            s_altHotkeyToBind = { -1, -1 };
-            s_bindingKeys.clear();
-            s_hadKeysPressed = false;
-            s_preHeldKeys.clear();
-            s_bindingInitialized = false;
-            ImGui::CloseCurrentPopup();
-            (void)capturedLParamCancel;
-            (void)capturedIsMouseCancel;
-            ImGui::EndPopup();
-            return;
-        }
-
         // Helper to finalize the binding
         auto finalize_bind = [&](const std::vector<DWORD>& keys) {
-            if (keys.empty()) return;
-
             if (s_mainHotkeyToBind != -1) {
                 if (s_mainHotkeyToBind == -999) {
                     // Special case for GUI hotkey
@@ -2491,8 +2468,10 @@ void RenderSettingsGUI() {
                 g_config.hotkeys[s_altHotkeyToBind.hotkey_idx].altSecondaryModes[s_altHotkeyToBind.alt_idx].keys = keys;
                 s_altHotkeyToBind = { -1, -1 };
             } else if (s_exclusionToBind.hotkey_idx != -1) {
-                // For exclusions, only use the last (main) key
-                g_config.hotkeys[s_exclusionToBind.hotkey_idx].conditions.exclusions[s_exclusionToBind.exclusion_idx] = keys.back();
+                // For exclusions, only use the last (main) key. Clearing isn't supported.
+                if (!keys.empty()) {
+                    g_config.hotkeys[s_exclusionToBind.hotkey_idx].conditions.exclusions[s_exclusionToBind.exclusion_idx] = keys.back();
+                }
                 s_exclusionToBind = { -1, -1 };
             }
             g_configIsDirty = true;
@@ -2509,6 +2488,67 @@ void RenderSettingsGUI() {
             s_bindingInitialized = false;
             ImGui::CloseCurrentPopup();
         };
+
+        // Handle special controls using the event stream (no polling).
+        // This runs before polling-based key accumulation so Backspace/Delete can be used to clear.
+        DWORD capturedVk = 0;
+        LPARAM capturedLParam = 0;
+        bool capturedIsMouse = false;
+        if (ConsumeBindingInputEventSince(s_lastBindingInputSeqHotkeyBind, capturedVk, capturedLParam, capturedIsMouse)) {
+            if (capturedVk == VK_ESCAPE) {
+                Log("Binding cancelled from Escape key.");
+                s_mainHotkeyToBind = -1;
+                s_sensHotkeyToBind = -1;
+                s_exclusionToBind = { -1, -1 };
+                s_altHotkeyToBind = { -1, -1 };
+                s_bindingKeys.clear();
+                s_hadKeysPressed = false;
+                s_preHeldKeys.clear();
+                s_bindingInitialized = false;
+                ImGui::CloseCurrentPopup();
+                (void)capturedLParam;
+                (void)capturedIsMouse;
+                ImGui::EndPopup();
+                return;
+            }
+
+            const bool canClear = (s_exclusionToBind.hotkey_idx == -1);
+            if (canClear && (capturedVk == VK_BACK || capturedVk == VK_DELETE)) {
+                Log("Binding cleared from Backspace/Delete.");
+                finalize_bind({});
+                ImGui::EndPopup();
+                return;
+            }
+        }
+
+        // Explicit buttons (usable even if Backspace/Delete are bound elsewhere).
+        {
+            const bool canClear = (s_exclusionToBind.hotkey_idx == -1);
+            if (!canClear) { ImGui::BeginDisabled(); }
+            if (ImGui::Button("Clear")) {
+                finalize_bind({});
+                ImGui::EndPopup();
+                return;
+            }
+            if (!canClear) { ImGui::EndDisabled(); }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                Log("Binding cancelled from Cancel button.");
+                s_mainHotkeyToBind = -1;
+                s_sensHotkeyToBind = -1;
+                s_exclusionToBind = { -1, -1 };
+                s_altHotkeyToBind = { -1, -1 };
+                s_bindingKeys.clear();
+                s_hadKeysPressed = false;
+                s_preHeldKeys.clear();
+                s_bindingInitialized = false;
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+                return;
+            }
+            ImGui::Separator();
+        }
 
         // Evict pre-held keys once they are physically released
         for (auto it = s_preHeldKeys.begin(); it != s_preHeldKeys.end(); ) {
