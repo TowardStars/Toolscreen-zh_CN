@@ -163,10 +163,14 @@ if (ImGui::BeginTabItem("General")) {
         return nullptr;
     };
 
-    // --- MODE TABLE LAYOUT ---
-    // Helper lambda to render a mode row in the table
+    enum class EyeZoomInlineKind {
+        None,
+        LabelsOnly,
+        ControlsOnly,
+    };
+
     auto RenderModeTableRow = [&](const std::string& modeId, const char* label, const char* hotkeyLabel, int defaultWidth,
-                                  int defaultHeight, int maxWidth, int maxHeight, bool showEyeZoomSettings = false) {
+                                  int defaultHeight, int maxWidth, int maxHeight, EyeZoomInlineKind eyezoomInline = EyeZoomInlineKind::None) {
         ModeConfig* modeConfig = GetModeConfig(modeId);
 
         // Ensure hotkey config exists for this mode
@@ -209,41 +213,38 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableNextColumn();
         RenderModeHotkeyBinding(modeId, hotkeyLabel);
 
-        // Column 5: EyeZoom settings (only for EyeZoom)
+        // Column 5: EyeZoom inline settings (Basic tab)
         ImGui::TableNextColumn();
-        if (showEyeZoomSettings) {
-            ImGui::PushID("eyezoom_inline_settings");
+        if (eyezoomInline != EyeZoomInlineKind::None) {
+            ImGui::PushID((std::string("eyezoom_inline_settings_") + modeId).c_str());
 
-            // Two-row layout to save horizontal space: labels above their controls.
             if (ImGui::BeginTable("##eyezoom_inline_tbl", 2, ImGuiTableFlags_SizingStretchSame)) {
                 ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted("Clone Width");
-                ImGui::TableSetColumnIndex(1);
-                ImGui::TextUnformatted("Overlay Pixels");
-                ImGui::SameLine();
-                HelpMarker("Clone Width controls how wide the EyeZoom clone samples.\n"
-                           "Overlay Pixels controls how much of the numbered overlay is drawn on each side of center.");
 
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::SetNextItemWidth(10.0f);
-                int maxCloneWidth = (modeConfig ? modeConfig->width : maxWidth);
-                if (maxCloneWidth < 2) maxCloneWidth = 2;
-                if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth)) {
-                    // Ensure value stays even (same behavior as Advanced tab)
-                    if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
-                    // Clamp overlay width to the new clone width
-                    int maxOverlay = g_config.eyezoom.cloneWidth / 2;
-                    if (g_config.eyezoom.overlayWidth > maxOverlay) g_config.eyezoom.overlayWidth = maxOverlay;
-                    g_configIsDirty = true;
-                }
+                if (eyezoomInline == EyeZoomInlineKind::LabelsOnly) {
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted("Clone Width");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted("Overlay Pixels");
+                    ImGui::SameLine();
+                    HelpMarker("Clone Width controls how wide the EyeZoom clone samples.\n"
+                               "Overlay Pixels controls how much of the numbered overlay is drawn on each side of center.");
+                } else if (eyezoomInline == EyeZoomInlineKind::ControlsOnly) {
+                    ImGui::TableSetColumnIndex(0);
+                    int maxCloneWidth = (modeConfig ? modeConfig->width : maxWidth);
+                    if (maxCloneWidth < 2) maxCloneWidth = 2;
+                    if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth, 64, 3)) {
+                        if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
+                        int maxOverlay = g_config.eyezoom.cloneWidth / 2;
+                        if (g_config.eyezoom.overlayWidth > maxOverlay) g_config.eyezoom.overlayWidth = maxOverlay;
+                        g_configIsDirty = true;
+                    }
 
-                ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(10.0f);
-                {
-                    int maxOverlay = g_config.eyezoom.cloneWidth / 2;
-                    if (Spinner("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay)) g_configIsDirty = true;
+                    ImGui::TableSetColumnIndex(1);
+                    {
+                        int maxOverlay = g_config.eyezoom.cloneWidth / 2;
+                        if (Spinner("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay, 64, 3)) g_configIsDirty = true;
+                    }
                 }
 
                 ImGui::EndTable();
@@ -277,13 +278,15 @@ if (ImGui::BeginTabItem("General")) {
         int monitorHeight = GetCachedScreenHeight();
 
         // Thin row (limited to monitor bounds)
-        RenderModeTableRow("Thin", "Thin", "thin_hotkey", 400, monitorHeight, monitorWidth, monitorHeight, false);
+        RenderModeTableRow("Thin", "Thin", "thin_hotkey", 400, monitorHeight, monitorWidth, monitorHeight, EyeZoomInlineKind::None);
 
         // Wide row (limited to monitor bounds)
-        RenderModeTableRow("Wide", "Wide", "wide_hotkey", monitorWidth, 400, monitorWidth, monitorHeight, false);
+        // Put the EyeZoom inline setting labels on the Wide row.
+        RenderModeTableRow("Wide", "Wide", "wide_hotkey", monitorWidth, 400, monitorWidth, monitorHeight, EyeZoomInlineKind::LabelsOnly);
 
         // EyeZoom row (special limits: width=monitor, height=16384, with inline EyeZoom settings)
-        RenderModeTableRow("EyeZoom", "EyeZoom", "eyezoom_hotkey", 384, 16384, monitorWidth, 16384, true);
+        // Put the EyeZoom inline setting controls on the EyeZoom row.
+        RenderModeTableRow("EyeZoom", "EyeZoom", "eyezoom_hotkey", 384, 16384, monitorWidth, 16384, EyeZoomInlineKind::ControlsOnly);
 
         ImGui::EndTable();
     }

@@ -353,7 +353,7 @@ bool GetMonitorSizeForWindow(HWND hwnd, int& outW, int& outH);
 bool IsFullscreen();
 // Toggle borderless-windowed fullscreen for the given window.
 // When toggling on, the window is resized to the current monitor's full rect and decorations are removed.
-// When toggling off, the previous window placement/style is restored (best-effort).
+// When toggling off, the window returns to windowed mode centered on the current monitor at half its width/height.
 void ToggleBorderlessWindowedFullscreen(HWND hwnd);
 bool IsCursorVisible();
 void WriteCurrentModeToFile(const std::string& modeId);

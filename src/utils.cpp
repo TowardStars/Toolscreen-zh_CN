@@ -2167,7 +2167,6 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
     static std::mutex s_borderlessMutex;
     static bool s_borderlessActive = false;
     static bool s_saved = false;
-    static WINDOWPLACEMENT s_savedPlacement{ sizeof(WINDOWPLACEMENT) };
     static DWORD s_savedStyle = 0;
     static DWORD s_savedExStyle = 0;
 
@@ -2180,16 +2179,19 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
     const int targetW = (targetRect.right - targetRect.left);
     const int targetH = (targetRect.bottom - targetRect.top);
 
+    // Desired windowed size/pos when leaving borderless: centered at 50% of the monitor size.
+    // (Interpreted as outer window size, not client size.)
+    const int windowedW = std::max(1, targetW / 2);
+    const int windowedH = std::max(1, targetH / 2);
+    const int windowedX = targetRect.left + (targetW - windowedW) / 2;
+    const int windowedY = targetRect.top + (targetH - windowedH) / 2;
+
     if (!s_borderlessActive) {
-        // Save current placement/style once per "enter borderless" toggle.
-        s_savedPlacement = WINDOWPLACEMENT{ sizeof(WINDOWPLACEMENT) };
-        if (GetWindowPlacement(hwnd, &s_savedPlacement)) {
-            s_savedStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
-            s_savedExStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
-            s_saved = true;
-        } else {
-            s_saved = false;
-        }
+        // Save current styles once per "enter borderless" toggle.
+        // (We intentionally do not restore the previous placement on toggle-off.)
+        s_savedStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
+        s_savedExStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+        s_saved = true;
 
         if (IsIconic(hwnd) || IsZoomed(hwnd)) {
             // Ensure we're in a normal (restored) state before resizing/restyling.
@@ -2216,28 +2218,40 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
 
         Log("[WINDOW] Toggled borderless ON (" + std::to_string(targetW) + "x" + std::to_string(targetH) + ")");
     } else {
-        // Restore
+        // Leave borderless: restore windowed styles, then force a centered half-size window.
+        if (IsIconic(hwnd) || IsZoomed(hwnd)) {
+            // Ensure we're in a normal (restored) state before resizing/restyling.
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+
         if (s_saved) {
-            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(s_savedStyle));
-            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(s_savedExStyle));
-
-            // Apply frame change first so placement restore uses the correct frame metrics.
-            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-
-            s_savedPlacement.length = sizeof(WINDOWPLACEMENT);
-            SetWindowPlacement(hwnd, &s_savedPlacement);
-        } else {
-            // Best-effort fallback if we never captured a saved placement.
-            DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
+            DWORD style = s_savedStyle;
+            style &= ~(WS_POPUP);
             style |= WS_OVERLAPPEDWINDOW;
             SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
-            SetWindowPos(hwnd, HWND_NOTOPMOST, targetRect.left + 50, targetRect.top + 50, targetW / 2, targetH / 2,
-                         SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
+            DWORD exStyle = s_savedExStyle;
+            exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW);
+            exStyle |= WS_EX_APPWINDOW;
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
+        } else {
+            // Best-effort fallback if we never captured a saved style.
+            DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
+            style &= ~(WS_POPUP);
+            style |= WS_OVERLAPPEDWINDOW;
+            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
+
+            DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+            exStyle &= ~(WS_EX_TOPMOST);
+            exStyle |= WS_EX_APPWINDOW;
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
         }
+
+        // Apply frame change + move/size in one go.
+        SetWindowPos(hwnd, HWND_NOTOPMOST, windowedX, windowedY, windowedW, windowedH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 
         g_cachedGameTextureId.store(UINT_MAX);
         s_borderlessActive = false;
-        Log("[WINDOW] Toggled borderless OFF");
+        Log("[WINDOW] Toggled borderless OFF -> windowed centered (" + std::to_string(windowedW) + "x" + std::to_string(windowedH) + ")");
     }
 }
