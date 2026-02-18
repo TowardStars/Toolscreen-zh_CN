@@ -32,6 +32,33 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         }
         ImGui::PopID();
 
+        // Borderless Hotkey Section
+        ImGui::SeparatorText("Window Hotkeys");
+        ImGui::PushID("borderless_hotkey");
+        std::string borderlessKeyStr = GetKeyComboString(g_config.borderlessHotkey);
+        std::string borderlessNodeLabel =
+            "Toggle Borderless (monitor-sized): " + (borderlessKeyStr.empty() ? "[None]" : borderlessKeyStr);
+
+        bool borderlessNodeOpen =
+            ImGui::TreeNodeEx("##borderless_hotkey_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", borderlessNodeLabel.c_str());
+        if (borderlessNodeOpen) {
+            const bool isBindingBorderless = (s_mainHotkeyToBind == -998);
+            const char* borderlessButtonLabel =
+                isBindingBorderless ? "[Press Keys...]" : (borderlessKeyStr.empty() ? "[None]" : borderlessKeyStr.c_str());
+            if (ImGui::Button(borderlessButtonLabel)) {
+                s_mainHotkeyToBind = -998; // Special ID for borderless toggle hotkey
+                s_altHotkeyToBind = { -1, -1 };
+                s_exclusionToBind = { -1, -1 };
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Toggles the game window between its previous windowed size and a borderless, monitor-sized window.");
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+
         ImGui::SeparatorText("Mode Hotkeys");
         int hotkey_to_remove = -1;
         for (size_t i = 0; i < g_config.hotkeys.size(); ++i) {

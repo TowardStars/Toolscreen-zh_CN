@@ -2428,6 +2428,9 @@ void RenderSettingsGUI() {
                 if (s_mainHotkeyToBind == -999) {
                     // Special case for GUI hotkey
                     g_config.guiHotkey = keys;
+                } else if (s_mainHotkeyToBind == -998) {
+                    // Special case for borderless toggle hotkey
+                    g_config.borderlessHotkey = keys;
                 } else {
                     g_config.hotkeys[s_mainHotkeyToBind].keys = keys;
                 }

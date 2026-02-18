@@ -456,6 +456,9 @@ struct Config {
     std::string defaultMode = "fullscreen";
     DebugGlobalConfig debug;
     std::vector<DWORD> guiHotkey = { VK_CONTROL, 'E' };
+    // Hotkey to toggle borderless-windowed fullscreen for the game window.
+    // Empty = disabled/unbound.
+    std::vector<DWORD> borderlessHotkey = {};
     CursorsConfig cursors;
     std::string fontPath = "c:\\Windows\\Fonts\\Arial.ttf"; // Custom font path for ImGui
     int fpsLimit = 0;                                       // FPS limit (0 = unlimited, 1-1000 = target FPS)

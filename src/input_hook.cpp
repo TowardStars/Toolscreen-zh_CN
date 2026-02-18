@@ -411,6 +411,55 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     return { true, 1 };
 }
 
+InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    PROFILE_SCOPE("HandleBorderlessToggle");
+
+    // Disabled/unbound
+    if (g_config.borderlessHotkey.empty()) { return { false, 0 }; }
+
+    // Avoid triggering while the user is actively binding hotkeys/rebinds in the GUI.
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) { return { false, 0 }; }
+
+    DWORD vkCode = 0;
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: {
+        vkCode = static_cast<DWORD>(wParam);
+        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        break;
+    }
+    case WM_LBUTTONDOWN:
+        vkCode = VK_LBUTTON;
+        break;
+    case WM_RBUTTONDOWN:
+        vkCode = VK_RBUTTON;
+        break;
+    case WM_MBUTTONDOWN:
+        vkCode = VK_MBUTTON;
+        break;
+    case WM_XBUTTONDOWN: {
+        WORD xButton = GET_XBUTTON_WPARAM(wParam);
+        vkCode = (xButton == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+        break;
+    }
+    default:
+        return { false, 0 };
+    }
+
+    if (!CheckHotkeyMatch(g_config.borderlessHotkey, vkCode)) { return { false, 0 }; }
+
+    // Simple debouncing
+    static std::atomic<int64_t> s_lastToggleMs{ 0 };
+    auto now = std::chrono::steady_clock::now();
+    int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    int64_t lastMs = s_lastToggleMs.load(std::memory_order_relaxed);
+    if (nowMs - lastMs < 250) { return { true, 1 }; }
+    s_lastToggleMs.store(nowMs, std::memory_order_relaxed);
+
+    ToggleBorderlessWindowedFullscreen(hWnd);
+    return { true, 1 };
+}
+
 InputHandlerResult HandleWindowOverlayKeyboard(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("HandleWindowOverlayKeyboard");
 
@@ -1382,6 +1431,10 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (result.consumed) return result.result;
 
     result = HandleWindowValidation(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    // This needs to run even in windowed mode (before HandleNonFullscreenCheck returns early)
+    result = HandleBorderlessToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
     result = HandleNonFullscreenCheck(hWnd, uMsg, wParam, lParam);

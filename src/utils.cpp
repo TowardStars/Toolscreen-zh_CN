@@ -3,6 +3,9 @@
 #include "logic_thread.h"
 #include "profiler.h"
 
+// From dllmain.cpp (declared in render.h)
+extern std::atomic<GLuint> g_cachedGameTextureId;
+
 #include "stb_image.h"
 #include <DbgHelp.h>
 #include <ShlObj.h>
@@ -2153,5 +2156,88 @@ void BackupConfigFile() {
     } else {
         DWORD error = GetLastError();
         Log("Failed to backup config file. Error code: " + std::to_string(error));
+    }
+}
+
+void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
+    if (!hwnd) { return; }
+
+    // Persist the last non-borderless placement/styles so we can restore on toggle-off.
+    // Guard with a mutex since this can be triggered from the window message thread.
+    static std::mutex s_borderlessMutex;
+    static bool s_borderlessActive = false;
+    static bool s_saved = false;
+    static WINDOWPLACEMENT s_savedPlacement{ sizeof(WINDOWPLACEMENT) };
+    static DWORD s_savedStyle = 0;
+    static DWORD s_savedExStyle = 0;
+
+    std::lock_guard<std::mutex> lock(s_borderlessMutex);
+
+    // Determine target monitor rect (multi-monitor safe)
+    RECT targetRect{ 0, 0, GetCachedScreenWidth(), GetCachedScreenHeight() };
+    GetMonitorRectForWindow(hwnd, targetRect);
+
+    const int targetW = (targetRect.right - targetRect.left);
+    const int targetH = (targetRect.bottom - targetRect.top);
+
+    if (!s_borderlessActive) {
+        // Save current placement/style once per "enter borderless" toggle.
+        s_savedPlacement = WINDOWPLACEMENT{ sizeof(WINDOWPLACEMENT) };
+        if (GetWindowPlacement(hwnd, &s_savedPlacement)) {
+            s_savedStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
+            s_savedExStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+            s_saved = true;
+        } else {
+            s_saved = false;
+        }
+
+        if (IsIconic(hwnd) || IsZoomed(hwnd)) {
+            // Ensure we're in a normal (restored) state before resizing/restyling.
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+
+        // Keep it as a "window" (avoid WS_POPUP / WS_EX_TOPMOST) so drivers don't treat it as exclusive fullscreen,
+        // while still removing decorations.
+        {
+            DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
+            style &= ~(WS_POPUP | WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+            style |= WS_OVERLAPPED;
+            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
+
+            DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+            exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
+            exStyle |= WS_EX_APPWINDOW;
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
+        }
+
+        SetWindowPos(hwnd, HWND_NOTOPMOST, targetRect.left, targetRect.top, targetW, targetH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        g_cachedGameTextureId.store(UINT_MAX);
+        s_borderlessActive = true;
+
+        Log("[WINDOW] Toggled borderless ON (" + std::to_string(targetW) + "x" + std::to_string(targetH) + ")");
+    } else {
+        // Restore
+        if (s_saved) {
+            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(s_savedStyle));
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(s_savedExStyle));
+
+            // Apply frame change first so placement restore uses the correct frame metrics.
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
+            s_savedPlacement.length = sizeof(WINDOWPLACEMENT);
+            SetWindowPlacement(hwnd, &s_savedPlacement);
+        } else {
+            // Best-effort fallback if we never captured a saved placement.
+            DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
+            style |= WS_OVERLAPPEDWINDOW;
+            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
+            SetWindowPos(hwnd, HWND_NOTOPMOST, targetRect.left + 50, targetRect.top + 50, targetW / 2, targetH / 2,
+                         SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        }
+
+        g_cachedGameTextureId.store(UINT_MAX);
+        s_borderlessActive = false;
+        Log("[WINDOW] Toggled borderless OFF");
     }
 }

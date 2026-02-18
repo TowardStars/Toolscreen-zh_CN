@@ -166,7 +166,7 @@ if (ImGui::BeginTabItem("General")) {
     // --- MODE TABLE LAYOUT ---
     // Helper lambda to render a mode row in the table
     auto RenderModeTableRow = [&](const std::string& modeId, const char* label, const char* hotkeyLabel, int defaultWidth,
-                                  int defaultHeight, int maxWidth, int maxHeight, bool showZoomOverlay = false) {
+                                  int defaultHeight, int maxWidth, int maxHeight, bool showEyeZoomSettings = false) {
         ModeConfig* modeConfig = GetModeConfig(modeId);
 
         // Ensure hotkey config exists for this mode
@@ -209,18 +209,46 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableNextColumn();
         RenderModeHotkeyBinding(modeId, hotkeyLabel);
 
-        // Column 5: Zoom Overlay Pixels (only for EyeZoom)
+        // Column 5: EyeZoom settings (only for EyeZoom)
         ImGui::TableNextColumn();
-        if (showZoomOverlay) {
-            // Display as half of cloneWidth, set cloneWidth to double the value
-            int zoomSize = g_config.eyezoom.cloneWidth / 2;
-            int maxZoomSize = 30; // Cap at 30
-            ImGui::PushID("eyezoom_zoom_overlay");
-            if (Spinner("##zo", &zoomSize, 1, 1, maxZoomSize, 64, 3)) {
-                // Set cloneWidth to double the zoom size
-                g_config.eyezoom.cloneWidth = zoomSize * 2;
-                g_configIsDirty = true;
+        if (showEyeZoomSettings) {
+            ImGui::PushID("eyezoom_inline_settings");
+
+            // Two-row layout to save horizontal space: labels above their controls.
+            if (ImGui::BeginTable("##eyezoom_inline_tbl", 2, ImGuiTableFlags_SizingStretchSame)) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("Clone Width");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted("Overlay Pixels");
+                ImGui::SameLine();
+                HelpMarker("Clone Width controls how wide the EyeZoom clone samples.\n"
+                           "Overlay Pixels controls how much of the numbered overlay is drawn on each side of center.");
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                int maxCloneWidth = (modeConfig ? modeConfig->width : maxWidth);
+                if (maxCloneWidth < 2) maxCloneWidth = 2;
+                if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth)) {
+                    // Ensure value stays even (same behavior as Advanced tab)
+                    if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
+                    // Clamp overlay width to the new clone width
+                    int maxOverlay = g_config.eyezoom.cloneWidth / 2;
+                    if (g_config.eyezoom.overlayWidth > maxOverlay) g_config.eyezoom.overlayWidth = maxOverlay;
+                    g_configIsDirty = true;
+                }
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                {
+                    int maxOverlay = g_config.eyezoom.cloneWidth / 2;
+                    if (Spinner("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay)) g_configIsDirty = true;
+                }
+
+                ImGui::EndTable();
             }
+
             ImGui::PopID();
         }
     };
@@ -231,11 +259,11 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableSetupColumn("Width", ImGuiTableColumnFlags_WidthFixed, 120);
         ImGui::TableSetupColumn("Height", ImGuiTableColumnFlags_WidthFixed, 120);
         ImGui::TableSetupColumn("Hotkey", ImGuiTableColumnFlags_WidthFixed, 150);
-        ImGui::TableSetupColumn("Zoom Overlay Pixels", ImGuiTableColumnFlags_WidthFixed, 200);
+        ImGui::TableSetupColumn("EyeZoom Settings", ImGuiTableColumnFlags_WidthFixed, 240);
 
         // Custom centered headers
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-        const char* headers[] = { "Mode", "Width", "Height", "Hotkey", "Zoom Overlay Pixels" };
+        const char* headers[] = { "Mode", "Width", "Height", "Hotkey", "EyeZoom Settings" };
         for (int i = 0; i < 5; i++) {
             ImGui::TableSetColumnIndex(i);
             float columnWidth = ImGui::GetColumnWidth();
@@ -254,7 +282,7 @@ if (ImGui::BeginTabItem("General")) {
         // Wide row (limited to monitor bounds)
         RenderModeTableRow("Wide", "Wide", "wide_hotkey", monitorWidth, 400, monitorWidth, monitorHeight, false);
 
-        // EyeZoom row (special limits: width=monitor, height=16384, with Zoom Overlay Pixels)
+        // EyeZoom row (special limits: width=monitor, height=16384, with inline EyeZoom settings)
         RenderModeTableRow("EyeZoom", "EyeZoom", "eyezoom_hotkey", 384, 16384, monitorWidth, 16384, true);
 
         ImGui::EndTable();

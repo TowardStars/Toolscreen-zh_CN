@@ -357,6 +357,9 @@ void RebuildHotkeyMainKeys_Internal() {
     // Also include GUI hotkey
     addMainKey(g_config.guiHotkey);
 
+    // Also include borderless toggle hotkey (optional)
+    addMainKey(g_config.borderlessHotkey);
+
     // Always include Escape as it can toggle GUI
     g_hotkeyMainKeys.insert(VK_ESCAPE);
 

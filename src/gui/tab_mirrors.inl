@@ -516,10 +516,8 @@ if (ImGui::BeginTabItem("Mirrors")) {
                     it->second.hasValidContent = false;
                 }
             }
-            if (ImGui::Checkbox("Only on my screen", &mirror.onlyOnMyScreen)) g_configIsDirty = true;
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, this mirror will only be visible to you and not captured by OBS");
-            }
+            // Mirrors: "Only on my screen" is intentionally disabled.
+            // The config value is forced to false at load/save time for mirrors.
             ImGui::Separator();
 
             ImGui::Text("Output Position");

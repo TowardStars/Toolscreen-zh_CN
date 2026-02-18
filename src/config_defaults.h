@@ -250,6 +250,9 @@ inline const std::string CONFIG_MIRROR_MATCH_COLORSPACE = "Auto";
 // Default GUI hotkey: LCtrl+I
 inline std::vector<DWORD> GetDefaultGuiHotkey() { return { VK_LCONTROL, 'I' }; }
 
+// Default borderless toggle hotkey: unbound/disabled
+inline std::vector<DWORD> GetDefaultBorderlessHotkey() { return {}; }
+
 // ============================================================================
 // Transition Type String Constants
 // ============================================================================

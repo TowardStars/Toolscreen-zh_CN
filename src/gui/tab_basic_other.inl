@@ -20,6 +20,26 @@ if (ImGui::BeginTabItem("Other")) {
     }
     ImGui::PopID();
 
+    // --- BORDERLESS TOGGLE HOTKEY SECTION ---
+    ImGui::SeparatorText("Window Hotkeys");
+    ImGui::PushID("basic_borderless_hotkey");
+    std::string borderlessKeyStr = GetKeyComboString(g_config.borderlessHotkey);
+
+    ImGui::Text("Toggle Borderless:");
+    ImGui::SameLine();
+
+    bool isBindingBorderless = (s_mainHotkeyToBind == -998);
+    const char* borderlessButtonLabel =
+        isBindingBorderless ? "[Press Keys...]" : (borderlessKeyStr.empty() ? "[Click to Bind]" : borderlessKeyStr.c_str());
+    if (ImGui::Button(borderlessButtonLabel, ImVec2(150, 0))) {
+        s_mainHotkeyToBind = -998; // Special ID for borderless toggle hotkey
+        s_altHotkeyToBind = { -1, -1 };
+        s_exclusionToBind = { -1, -1 };
+    }
+    ImGui::SameLine();
+    HelpMarker("Toggles the game window between its previous windowed size and a borderless, monitor-sized window.");
+    ImGui::PopID();
+
     // --- DISPLAY SETTINGS ---
     ImGui::SeparatorText("Display Settings");
 

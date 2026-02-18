@@ -440,7 +440,9 @@ void MirrorConfigToToml(const MirrorConfig& cfg, toml::table& out) {
     out.insert("opacity", std::round(cfg.opacity * 1000.0f) / 1000.0f);
     out.insert("rawOutput", cfg.rawOutput);
     out.insert("colorPassthrough", cfg.colorPassthrough);
-    out.insert("onlyOnMyScreen", cfg.onlyOnMyScreen);
+    // Mirrors: onlyOnMyScreen is currently disabled (forced false), but we keep the field
+    // in the config for compatibility with older/newer configs.
+    out.insert("onlyOnMyScreen", false);
 }
 
 void MirrorConfigFromToml(const toml::table& tbl, MirrorConfig& cfg) {
@@ -481,7 +483,11 @@ void MirrorConfigFromToml(const toml::table& tbl, MirrorConfig& cfg) {
     cfg.opacity = GetOr(tbl, "opacity", 1.0f);
     cfg.rawOutput = GetOr(tbl, "rawOutput", ConfigDefaults::MIRROR_RAW_OUTPUT);
     cfg.colorPassthrough = GetOr(tbl, "colorPassthrough", ConfigDefaults::MIRROR_COLOR_PASSTHROUGH);
-    cfg.onlyOnMyScreen = GetOr(tbl, "onlyOnMyScreen", ConfigDefaults::MIRROR_ONLY_ON_MY_SCREEN);
+    // Mirrors: onlyOnMyScreen is intentionally disabled. We still read the key for
+    // backward compatibility, but force the runtime value to false.
+    const bool parsedOnlyOnMyScreen = GetOr(tbl, "onlyOnMyScreen", ConfigDefaults::MIRROR_ONLY_ON_MY_SCREEN);
+    (void)parsedOnlyOnMyScreen;
+    cfg.onlyOnMyScreen = false;
     // Note: mirror.debug section is ignored for backward compatibility
 }
 
@@ -1401,6 +1407,11 @@ void ConfigToToml(const Config& config, toml::table& out) {
     for (const auto& key : config.guiHotkey) { guiHotkeyArr.push_back(static_cast<int64_t>(key)); }
     out.insert("guiHotkey", guiHotkeyArr);
 
+    // Borderless toggle hotkey (optional)
+    toml::array borderlessHotkeyArr;
+    for (const auto& key : config.borderlessHotkey) { borderlessHotkeyArr.push_back(static_cast<int64_t>(key)); }
+    out.insert("borderlessHotkey", borderlessHotkeyArr);
+
     // Debug
     toml::table debugTbl;
     DebugGlobalConfigToToml(config.debug, debugTbl);
@@ -1517,6 +1528,16 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
     if (config.guiHotkey.empty()) { config.guiHotkey = ConfigDefaults::GetDefaultGuiHotkey(); }
+
+    // Borderless toggle hotkey (optional; empty array = disabled)
+    config.borderlessHotkey.clear();
+    const bool hasBorderlessHotkey = tbl.contains("borderlessHotkey");
+    if (auto arr = GetArray(tbl, "borderlessHotkey")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<int64_t>()) { config.borderlessHotkey.push_back(static_cast<DWORD>(*val)); }
+        }
+    }
+    if (!hasBorderlessHotkey) { config.borderlessHotkey = ConfigDefaults::GetDefaultBorderlessHotkey(); }
 
     // Debug
     if (auto t = GetTable(tbl, "debug")) { DebugGlobalConfigFromToml(*t, config.debug); }
@@ -1650,6 +1671,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "disableFullscreenPrompt",
                                                  "disableConfigurePrompt",
                                                  "guiHotkey",
+                                                 "borderlessHotkey",
                                                  "debug",
                                                  "eyezoom",
                                                  "cursors",
