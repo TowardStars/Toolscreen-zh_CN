@@ -129,6 +129,9 @@ std::vector<ModeConfig> GetDefaultModesFromEmbedded();
 // Get default mirrors from embedded config
 std::vector<MirrorConfig> GetDefaultMirrorsFromEmbedded();
 
+// Get default mirror groups from embedded config
+std::vector<MirrorGroupConfig> GetDefaultMirrorGroupsFromEmbedded();
+
 // Get default hotkeys from embedded config
 std::vector<HotkeyConfig> GetDefaultHotkeysFromEmbedded();
 

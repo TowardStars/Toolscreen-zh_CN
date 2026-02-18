@@ -2020,6 +2020,36 @@ std::vector<MirrorConfig> GetDefaultMirrorsFromEmbedded() {
     return mirrors;
 }
 
+std::vector<MirrorGroupConfig> GetDefaultMirrorGroupsFromEmbedded() {
+    std::string configStr = GetEmbeddedDefaultConfigString();
+    std::vector<MirrorGroupConfig> groups;
+
+    if (configStr.empty()) {
+        Log("WARNING: Could not load embedded config for mirror groups, falling back to empty");
+        return groups;
+    }
+
+    try {
+        toml::table tbl = toml::parse(configStr);
+
+        // Parse mirror groups array
+        if (auto arr = GetArray(tbl, "mirrorGroup")) {
+            for (const auto& elem : *arr) {
+                if (auto t = elem.as_table()) {
+                    MirrorGroupConfig group;
+                    MirrorGroupConfigFromToml(*t, group);
+                    groups.push_back(group);
+                }
+            }
+        }
+
+    } catch (const std::exception& e) {
+        Log("ERROR: Failed to parse embedded mirror groups: " + std::string(e.what()));
+    }
+
+    return groups;
+}
+
 std::vector<HotkeyConfig> GetDefaultHotkeysFromEmbedded() {
     std::string configStr = GetEmbeddedDefaultConfigString();
     std::vector<HotkeyConfig> hotkeys;

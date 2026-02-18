@@ -8,6 +8,9 @@ if (ImGui::BeginTabItem("Mirrors")) {
     // Track selected mirror for visual feedback
     static std::string selectedMirrorName = "";
 
+    // Track selected mirror group for visual feedback
+    static std::string selectedGroupName = "";
+
     int mirror_to_remove = -1;
     for (size_t i = 0; i < g_config.mirrors.size(); ++i) {
         auto& mirror = g_config.mirrors[i];
@@ -752,15 +755,59 @@ if (ImGui::BeginTabItem("Mirrors")) {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Reset to Defaults##mirrors")) { ImGui::OpenPopup("Reset Mirrors to Defaults?"); }
+    if (ImGui::Button("Reset to Defaults##mirrors")) { ImGui::OpenPopup("Reset Mirrors & Groups to Defaults?"); }
 
-    if (ImGui::BeginPopupModal("Reset Mirrors to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal("Reset Mirrors & Groups to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "WARNING:");
-        ImGui::Text("This will delete ALL custom mirrors and restore the default mirrors.");
+        ImGui::Text("This will delete ALL custom mirrors and mirror groups\n"
+                   "and restore the default mirrors and mirror groups.");
         ImGui::Text("This action cannot be undone.");
         ImGui::Separator();
         if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
             g_config.mirrors = GetDefaultMirrors();
+            g_config.mirrorGroups = GetDefaultMirrorGroups();
+
+            // Remove references to deleted mirrors/groups from modes
+            std::vector<std::string> mirrorNames;
+            mirrorNames.reserve(g_config.mirrors.size());
+            for (const auto& m : g_config.mirrors) { mirrorNames.push_back(m.name); }
+
+            std::vector<std::string> groupNames;
+            groupNames.reserve(g_config.mirrorGroups.size());
+            for (const auto& g : g_config.mirrorGroups) { groupNames.push_back(g.name); }
+
+            for (auto& mode : g_config.modes) {
+                mode.mirrorIds.erase(std::remove_if(mode.mirrorIds.begin(), mode.mirrorIds.end(),
+                                                    [&mirrorNames](const std::string& id) {
+                                                        return std::find(mirrorNames.begin(), mirrorNames.end(), id) == mirrorNames.end();
+                                                    }),
+                                   mode.mirrorIds.end());
+                mode.mirrorGroupIds.erase(std::remove_if(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(),
+                                                         [&groupNames](const std::string& id) {
+                                                             return std::find(groupNames.begin(), groupNames.end(), id) == groupNames.end();
+                                                         }),
+                                        mode.mirrorGroupIds.end());
+            }
+
+            // Prune any group items that reference missing mirrors
+            for (auto& group : g_config.mirrorGroups) {
+                group.mirrors.erase(
+                    std::remove_if(group.mirrors.begin(), group.mirrors.end(),
+                                   [&mirrorNames](const MirrorGroupItem& item) {
+                                       return std::find(mirrorNames.begin(), mirrorNames.end(), item.mirrorId) == mirrorNames.end();
+                                   }),
+                    group.mirrors.end());
+            }
+
+            // Clear selection state so UI doesn't point at deleted items
+            selectedMirrorName.clear();
+            selectedGroupName.clear();
+
+            // Ensure GPU resources exist for any restored default mirrors
+            for (const auto& mirror : g_config.mirrors) {
+                CreateMirrorGPUResources(mirror);
+            }
+
             g_configIsDirty = true;
             ImGui::CloseCurrentPopup();
         }
@@ -772,7 +819,6 @@ if (ImGui::BeginTabItem("Mirrors")) {
 
     ImGui::SeparatorText("Mirror Groups");
 
-    static std::string selectedGroupName = "";
     int group_to_remove = -1;
     for (size_t i = 0; i < g_config.mirrorGroups.size(); ++i) {
         auto& group = g_config.mirrorGroups[i];

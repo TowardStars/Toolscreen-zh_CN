@@ -1703,6 +1703,8 @@ std::vector<ModeConfig> GetDefaultModes() { return GetDefaultModesFromEmbedded()
 
 std::vector<MirrorConfig> GetDefaultMirrors() { return GetDefaultMirrorsFromEmbedded(); }
 
+std::vector<MirrorGroupConfig> GetDefaultMirrorGroups() { return GetDefaultMirrorGroupsFromEmbedded(); }
+
 std::vector<ImageConfig> GetDefaultImages() { return GetDefaultImagesFromEmbedded(); }
 
 std::vector<WindowOverlayConfig> GetDefaultWindowOverlays() {
