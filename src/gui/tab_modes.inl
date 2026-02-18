@@ -392,7 +392,7 @@
                 ImGui::NextColumn();
                 ImGui::Text("Zoom FPS");
                 ImGui::NextColumn();
-                if (Spinner("##EyeZoomCloneFps", &g_config.eyezoom.cloneFps, 1, 60, 120)) g_configIsDirty = true;
+                if (Spinner("##EyeZoomCloneFps", &g_config.eyezoom.cloneFps, 1, 5, 240)) g_configIsDirty = true;
                 ImGui::SameLine();
                 HelpMarker("Caps how often the EyeZoom clone texture updates (in frames per second).\n"
                            "0 = unlimited (update every frame).\n"
