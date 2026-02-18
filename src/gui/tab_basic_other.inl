@@ -29,6 +29,10 @@ if (ImGui::BeginTabItem("Other")) {
     // Image overlays
     ImGui::PushID("basic_image_overlay_toggle_hotkey");
     {
+        const bool imgOverlaysVisible = g_imageOverlaysVisible.load(std::memory_order_acquire);
+        const ImVec4 visibleGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
+        const ImVec4 hiddenRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
+
         std::string imgKeyStr = GetKeyComboString(g_config.imageOverlaysHotkey);
         ImGui::Text("Toggle Image Overlays:");
         ImGui::SameLine();
@@ -45,12 +49,21 @@ if (ImGui::BeginTabItem("Other")) {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Toggles visibility of all Image Overlays.");
         }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("Status:");
+        ImGui::SameLine();
+        ImGui::TextColored(imgOverlaysVisible ? visibleGreen : hiddenRed, "%s", imgOverlaysVisible ? "Shown" : "Hidden");
     }
     ImGui::PopID();
 
     // Window overlays
     ImGui::PushID("basic_window_overlay_toggle_hotkey");
     {
+        const bool winOverlaysVisible = g_windowOverlaysVisible.load(std::memory_order_acquire);
+        const ImVec4 visibleGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
+        const ImVec4 hiddenRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
+
         std::string winKeyStr = GetKeyComboString(g_config.windowOverlaysHotkey);
         ImGui::Text("Toggle Window Overlays:");
         ImGui::SameLine();
@@ -67,6 +80,11 @@ if (ImGui::BeginTabItem("Other")) {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Toggles visibility of all Window Overlays. When hidden, interaction forwarding is disabled.");
         }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("Status:");
+        ImGui::SameLine();
+        ImGui::TextColored(winOverlaysVisible ? visibleGreen : hiddenRed, "%s", winOverlaysVisible ? "Shown" : "Hidden");
     }
     ImGui::PopID();
 

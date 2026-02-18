@@ -6,8 +6,8 @@
 // Toolscreen version displayed in GUI, Config version triggers auto-upgrade in LoadConfig()
 
 // Toolscreen version information
-#define TOOLSCREEN_VERSION_MAJOR 100
-#define TOOLSCREEN_VERSION_MINOR 4
+#define TOOLSCREEN_VERSION_MAJOR 1
+#define TOOLSCREEN_VERSION_MINOR 0
 #define TOOLSCREEN_VERSION_PATCH 4
 
 // Config version for automatic upgrades

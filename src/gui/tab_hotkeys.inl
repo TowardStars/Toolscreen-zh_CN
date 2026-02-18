@@ -70,8 +70,17 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             std::string imgOverlayNodeLabel =
                 "Toggle Image Overlays: " + (imgOverlayKeyStr.empty() ? "[None]" : imgOverlayKeyStr);
 
+            const bool imgOverlaysVisible = g_imageOverlaysVisible.load(std::memory_order_acquire);
+            const ImVec4 visibleGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
+            const ImVec4 hiddenRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
+
             bool imgOverlayNodeOpen =
                 ImGui::TreeNodeEx("##image_overlay_toggle_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", imgOverlayNodeLabel.c_str());
+
+            ImGui::SameLine();
+            ImGui::TextDisabled("Status:");
+            ImGui::SameLine();
+            ImGui::TextColored(imgOverlaysVisible ? visibleGreen : hiddenRed, "%s", imgOverlaysVisible ? "Shown" : "Hidden");
             if (imgOverlayNodeOpen) {
                 const bool isBindingImgOverlay = (s_mainHotkeyToBind == -997);
                 const char* imgOverlayButtonLabel =
@@ -94,8 +103,15 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             std::string winOverlayNodeLabel =
                 "Toggle Window Overlays: " + (winOverlayKeyStr.empty() ? "[None]" : winOverlayKeyStr);
 
+            const bool winOverlaysVisible = g_windowOverlaysVisible.load(std::memory_order_acquire);
+
             bool winOverlayNodeOpen =
                 ImGui::TreeNodeEx("##window_overlay_toggle_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", winOverlayNodeLabel.c_str());
+
+            ImGui::SameLine();
+            ImGui::TextDisabled("Status:");
+            ImGui::SameLine();
+            ImGui::TextColored(winOverlaysVisible ? visibleGreen : hiddenRed, "%s", winOverlaysVisible ? "Shown" : "Hidden");
             if (winOverlayNodeOpen) {
                 const bool isBindingWinOverlay = (s_mainHotkeyToBind == -996);
                 const char* winOverlayButtonLabel =
