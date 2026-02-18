@@ -822,9 +822,9 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
         LogCategory("texture_ops", "SubmitFrameCapture: Resized copy textures to " + std::to_string(width) + "x" + std::to_string(height));
     }
 
-    // Create temp FBO to read from game texture
-    GLuint srcFBO = 0;
-    glGenFramebuffers(1, &srcFBO);
+    // Reuse a cached FBO for reading from the game texture (avoid per-frame create/delete)
+    static GLuint srcFBO = 0;
+    if (srcFBO == 0) { glGenFramebuffers(1, &srcFBO); }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFBO);
     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTexture, 0);
 
@@ -840,7 +840,6 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
         // Game texture is in a bad state (probably being recreated due to WM_SIZE)
         // Skip this frame's capture - the next frame will have a valid texture
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        glDeleteFramebuffers(1, &srcFBO);
         restoreState();
         return;
     }
@@ -863,7 +862,6 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
         // Our copy texture is in a bad state - skip this frame
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glDeleteFramebuffers(1, &srcFBO);
         restoreState();
         return;
     }
@@ -878,8 +876,7 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
     glClear(GL_COLOR_BUFFER_BIT);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    // Cleanup temp FBO
-    glDeleteFramebuffers(1, &srcFBO);
+    // Unbind FBOs (srcFBO is cached and reused across frames)
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
@@ -1109,27 +1106,17 @@ static bool RenderMirrorToBackBuffer(MirrorInstance* inst, const ThreadedMirrorC
     // Reset GL state after pass 1
     glDisable(GL_BLEND);
 
-    // === Content Detection: Check if any pixels have non-zero alpha ===
-    // This is used by static borders to avoid rendering when mirror has no matching pixels
-    // Only needed for non-raw output (filter mode) - raw output always has content
-    bool hasContent = useRawOutput; // Raw output always has content
-    if (!useRawOutput) {
-        // Read back pixels from the filter FBO to check for content
-        // Sample the entire texture to detect any matching pixels
-        int fboW = inst->fbo_w;
-        int fboH = inst->fbo_h;
-        std::vector<unsigned char> pixels(fboW * fboH * 4);
-        glReadPixels(0, 0, fboW, fboH, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-
-        // Check if any pixel has non-zero alpha
-        for (size_t i = 3; i < pixels.size(); i += 4) { // Check alpha channel (every 4th byte starting at index 3)
-            if (pixels[i] > 0) {
-                hasContent = true;
-                break;
-            }
-        }
+    // === Content Detection: Async PBO readback for non-zero alpha check ===
+    // This is used by static borders to avoid rendering when mirror has no matching pixels.
+    // Uses async PBO readback: previous frame's result is harvested (non-blocking), then a
+    // new async readback is started for this frame. The old hasFrameContentBack value persists
+    // until the new readback completes, preventing flicker on content change.
+    // Only needed for non-raw output (filter mode) - raw output always has content.
+    if (useRawOutput) {
+        inst->hasFrameContentBack = true;
     }
-    inst->hasFrameContentBack = hasContent;
+    // else: hasFrameContentBack keeps its previous value until async readback updates it
+    // (the async readback initiation and harvest happens in the caller after this function)
 
     // === PASS 2: Apply border shader and render to final texture ===
     // This produces screen-ready content so render thread just needs to blit.
@@ -1223,6 +1210,16 @@ struct MT_MirrorFbos {
     GLuint finalBackFbo = 0;  // attaches inst->finalTextureBack
     GLuint lastBackTex = 0;
     GLuint lastFinalBackTex = 0;
+
+    // Async PBO for content detection (replaces synchronous glReadPixels)
+    // Frame N: start async readback into PBO after filter pass
+    // Frame N+1: read back results from PBO (non-blocking) before starting new readback
+    // Previous frame's hasFrameContent is kept until new result is available, avoiding flicker.
+    GLuint contentDetectionPBO = 0;   // PBO for async readback
+    int contentPBOWidth = 0;          // Dimensions when PBO was allocated
+    int contentPBOHeight = 0;
+    bool contentReadbackPending = false; // True when an async readback is in-flight
+    GLsync contentReadbackFence = nullptr; // Fence for the async readback
 };
 
 static void MirrorCaptureThreadFunc(void* unused) {
@@ -1565,11 +1562,84 @@ static void MirrorCaptureThreadFunc(void* unused) {
                 // Do NOT overwrite it here from conf.rawOutput - that causes race condition where
                 // stale config value overwrites the GUI's immediate update.
 
+                // === Harvest previous async content detection result (non-blocking) ===
+                // Check if the PBO readback from the PREVIOUS frame is complete.
+                // If so, read the result and update hasFrameContentBack.
+                // If not ready yet, keep the previous value (no flicker).
+                {
+                    MT_MirrorFbos& fb = mt_fbos[conf.name];
+                    if (fb.contentReadbackPending && fb.contentReadbackFence) {
+                        GLenum fenceStatus = glClientWaitSync(fb.contentReadbackFence, 0, 0); // Non-blocking check
+                        if (fenceStatus == GL_ALREADY_SIGNALED || fenceStatus == GL_CONDITION_SATISFIED) {
+                            // Readback is complete - harvest the result
+                            glBindBuffer(GL_PIXEL_PACK_BUFFER, fb.contentDetectionPBO);
+                            const unsigned char* mapped = static_cast<const unsigned char*>(
+                                glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                                    fb.contentPBOWidth * fb.contentPBOHeight * 4, GL_MAP_READ_BIT));
+                            if (mapped) {
+                                bool hasContent = false;
+                                size_t totalBytes = static_cast<size_t>(fb.contentPBOWidth) * fb.contentPBOHeight * 4;
+                                for (size_t i = 3; i < totalBytes; i += 4) {
+                                    if (mapped[i] > 0) {
+                                        hasContent = true;
+                                        break;
+                                    }
+                                }
+                                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+                                inst->hasFrameContentBack = hasContent;
+                            }
+                            // If glMapBufferRange returned null, the buffer is not mapped -
+                            // do NOT call glUnmapBuffer (it would generate GL_INVALID_OPERATION).
+                            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+                            glDeleteSync(fb.contentReadbackFence);
+                            fb.contentReadbackFence = nullptr;
+                            fb.contentReadbackPending = false;
+                        }
+                        // else: not ready yet, keep previous hasFrameContentBack value
+                    }
+                }
+
                 // Render the mirror
                 debugSamplePixel(conf, validTexture, gameW, gameH);
 
                 RenderMirrorToBackBuffer(inst, conf, validTexture, captureVAO, captureVBO, localBackFbo, localFinalBackFbo, gammaMode, gameW,
                                          gameH);
+
+                // === Start async PBO readback for content detection ===
+                // Only for non-raw mirrors: initiate an async glReadPixels into a PBO.
+                // The result will be harvested on the NEXT frame (non-blocking).
+                if (!inst->desiredRawOutput.load(std::memory_order_acquire)) {
+                    MT_MirrorFbos& fb = mt_fbos[conf.name];
+                    int fboW = inst->fbo_w;
+                    int fboH = inst->fbo_h;
+
+                    // Create or resize PBO if needed
+                    if (fb.contentDetectionPBO == 0 || fb.contentPBOWidth != fboW || fb.contentPBOHeight != fboH) {
+                        if (fb.contentDetectionPBO == 0) { glGenBuffers(1, &fb.contentDetectionPBO); }
+                        glBindBuffer(GL_PIXEL_PACK_BUFFER, fb.contentDetectionPBO);
+                        glBufferData(GL_PIXEL_PACK_BUFFER, fboW * fboH * 4, nullptr, GL_STREAM_READ);
+                        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+                        fb.contentPBOWidth = fboW;
+                        fb.contentPBOHeight = fboH;
+                    }
+
+                    // Clean up any old fence that wasn't harvested
+                    if (fb.contentReadbackFence) {
+                        glDeleteSync(fb.contentReadbackFence);
+                        fb.contentReadbackFence = nullptr;
+                    }
+
+                    // Bind the filter FBO (pass 1 output) and start async read
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER, localBackFbo);
+                    glBindBuffer(GL_PIXEL_PACK_BUFFER, fb.contentDetectionPBO);
+                    glReadPixels(0, 0, fboW, fboH, GL_RGBA, GL_UNSIGNED_BYTE, nullptr); // Async into PBO
+                    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+                    // Fence so we know when the readback is done
+                    fb.contentReadbackFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                    fb.contentReadbackPending = true;
+                }
 
                 // Pre-compute render cache for the render thread
                 // Read current screen geometry from atomics
@@ -1594,13 +1664,12 @@ static void MirrorCaptureThreadFunc(void* unused) {
                 if (inst->gpuFenceBack) { glDeleteSync(inst->gpuFenceBack); }
                 inst->gpuFenceBack = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 
-                // CRITICAL: Use glFinish() to ensure all GPU work is complete before signaling
-                // that the buffer is ready. This is more aggressive than glFlush() but guarantees
-                // no race conditions with the render thread reading the texture.
-                {
-                    PROFILE_SCOPE_CAT("glFinish", "Mirror Thread");
-                    glFinish();
-                }
+                // Flush to submit all GPU commands and the fence to the driver.
+                // The render thread will glClientWaitSync on gpuFence (after SwapMirrorBuffers)
+                // to ensure GPU work is complete before reading. glFlush() is sufficient here
+                // because the fence-based wait on the consumer side provides the actual
+                // synchronization guarantee. glFinish() would stall this thread unnecessarily.
+                glFlush();
 
                 // Signal that back buffer is ready
                 inst->captureReady.store(true, std::memory_order_release);
@@ -1646,10 +1715,12 @@ static void MirrorCaptureThreadFunc(void* unused) {
 
         if (debugSampleFbo) { glDeleteFramebuffers(1, &debugSampleFbo); }
 
-        // Cleanup mirror-thread local FBOs
+        // Cleanup mirror-thread local FBOs and PBOs
         for (auto& kv : mt_fbos) {
             if (kv.second.backFbo) { glDeleteFramebuffers(1, &kv.second.backFbo); }
             if (kv.second.finalBackFbo) { glDeleteFramebuffers(1, &kv.second.finalBackFbo); }
+            if (kv.second.contentDetectionPBO) { glDeleteBuffers(1, &kv.second.contentDetectionPBO); }
+            if (kv.second.contentReadbackFence) { glDeleteSync(kv.second.contentReadbackFence); }
         }
         mt_fbos.clear();
 

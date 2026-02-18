@@ -2181,8 +2181,8 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
 
     // Desired windowed size/pos when leaving borderless: centered at 50% of the monitor size.
     // (Interpreted as outer window size, not client size.)
-    const int windowedW = std::max(1, targetW / 2);
-    const int windowedH = std::max(1, targetH / 2);
+    const int windowedW = (std::max)(1, targetW / 2);
+    const int windowedH = (std::max)(1, targetH / 2);
     const int windowedX = targetRect.left + (targetW - windowedW) / 2;
     const int windowedY = targetRect.top + (targetH - windowedH) / 2;
 

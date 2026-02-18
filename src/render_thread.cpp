@@ -1730,17 +1730,16 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         srcHeight = rt_eyeZoomSnapshotHeight;
 
         // STEP 1: Blit entire snapshot to destination
-        GLuint tempFBO = 0;
-        glGenFramebuffers(1, &tempFBO);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, tempFBO);
+        // Reuse a cached FBO for reading from the snapshot texture (avoid per-frame create/delete)
+        static GLuint snapshotReadFBO = 0;
+        if (snapshotReadFBO == 0) { glGenFramebuffers(1, &snapshotReadFBO); }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, snapshotReadFBO);
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rt_eyeZoomSnapshotTexture, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
 
         // Blit entire snapshot to destination (snapshot already contains the zoomed content)
         glBlitFramebuffer(0, 0, srcWidth, srcHeight, zoomX, zoomY_gl, zoomX + zoomOutputWidth, zoomY_gl + zoomOutputHeight,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-        glDeleteFramebuffers(1, &tempFBO);
     } else {
         // Normal path: sample from game texture center
         // Use ACTUAL game texture dimensions, not EyeZoom config dimensions
@@ -1764,15 +1763,14 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         int dstTop = zoomY_gl + zoomOutputHeight;
 
         // STEP 1: Blit from game texture to FBO
-        GLuint tempFBO = 0;
-        glGenFramebuffers(1, &tempFBO);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, tempFBO);
+        // Reuse a cached FBO for reading from the game texture (avoid per-frame create/delete)
+        static GLuint gameReadFBO = 0;
+        if (gameReadFBO == 0) { glGenFramebuffers(1, &gameReadFBO); }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, gameReadFBO);
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTexture, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
 
         glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, dstLeft, dstBottom, dstRight, dstTop, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-        glDeleteFramebuffers(1, &tempFBO);
 
         // CAPTURE SNAPSHOT: Store the EyeZoom output for transition-out animation
         // Only capture when we're NOT transitioning from EyeZoom (stable or transitioning TO)
@@ -1931,19 +1929,28 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
     }
 
     // Pre-cache mirror render data
-    // Use unique_lock because we need to wait on the fence while holding the lock
+    // PHASE 1: Copy all needed data under the lock (fast, no GPU waits)
+    // PHASE 2: Wait on GPU fences OUTSIDE the lock (avoids blocking mirror thread)
     std::vector<MirrorRenderData> mirrorsToRender;
     mirrorsToRender.reserve(activeMirrors.size());
 
+    // Temporary struct to hold fence + index for deferred fence wait
+    struct PendingFenceWait {
+        GLsync fence;
+        size_t renderDataIndex;
+    };
+    std::vector<PendingFenceWait> pendingFences;
+
     {
-        std::unique_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex);
+        // PHASE 1: Shared (read) lock - just copy data, no GPU operations
+        std::shared_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex);
         for (const auto& conf : activeMirrors) {
             if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
 
             auto it = g_mirrorInstances.find(conf.name);
             if (it == g_mirrorInstances.end()) continue;
 
-            MirrorInstance& inst = it->second;
+            const MirrorInstance& inst = it->second;
             if (!inst.hasValidContent) continue;
 
             MirrorRenderData data;
@@ -1978,18 +1985,9 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
 
             if (data.texture == 0) continue;
 
-            // CRITICAL: Wait for capture thread's GPU work to complete before reading texture
-            // We wait on the fence but do NOT delete it - multiple render paths may need to
-            // wait on the same fence. The fence will be deleted when SwapMirrorBuffers swaps
-            // in a new fence from the capture thread.
-            if (inst.gpuFence) {
-                // Wait with timeout loop to handle GPU load - keep waiting until complete
-                GLenum waitResult;
-                do {
-                    waitResult = glClientWaitSync(inst.gpuFence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ULL);
-                } while (waitResult == GL_TIMEOUT_EXPIRED);
-            }
-            data.gpuFence = nullptr; // Not used, kept for struct compatibility
+            // Copy the fence handle - we'll wait on it AFTER releasing the lock
+            // The fence is not deleted here; it lives until SwapMirrorBuffers replaces it
+            GLsync fence = inst.gpuFence;
 
             // Check if cache is still valid for current viewport geometry AND output position
             // During animations, geo.finalX/Y/W/H change every frame, so cached positions become stale
@@ -2019,8 +2017,25 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
             // Copy content presence flag for static border rendering
             data.hasFrameContent = inst.hasFrameContent;
 
+            data.gpuFence = nullptr; // Not used in data struct, kept for compatibility
+            size_t idx = mirrorsToRender.size();
             mirrorsToRender.push_back(data);
+
+            // Record fence for deferred wait (only if fence exists)
+            if (fence) {
+                pendingFences.push_back({ fence, idx });
+            }
         }
+    } // Lock released here - mirror thread is now unblocked
+
+    // PHASE 2: Wait on GPU fences WITHOUT holding the mutex
+    // This prevents priority inversion where the mirror thread can't acquire the lock
+    // because we're holding it while blocking on a GPU fence.
+    for (const auto& pf : pendingFences) {
+        GLenum waitResult;
+        do {
+            waitResult = glClientWaitSync(pf.fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ULL);
+        } while (waitResult == GL_TIMEOUT_EXPIRED);
     }
 
     if (mirrorsToRender.empty()) return;
@@ -3296,6 +3311,21 @@ static void RenderThreadFunc(void* gameGLContext) {
                 GLuint readyTex = GetReadyGameTexture();
                 int srcW = GetReadyGameWidth();
                 int srcH = GetReadyGameHeight();
+
+                // Fallback: if ready frame not available, use the safe read texture
+                // This may be 1 frame behind but won't flicker (matches OBS path fallback)
+                if (readyTex == 0 || srcW <= 0 || srcH <= 0) {
+                    GLuint safeTex = GetSafeReadTexture();
+                    if (safeTex != 0) {
+                        readyTex = safeTex;
+                        srcW = GetFallbackGameWidth();
+                        srcH = GetFallbackGameHeight();
+                        if (srcW <= 0 || srcH <= 0) {
+                            srcW = request.fullW;
+                            srcH = request.fullH;
+                        }
+                    }
+                }
 
                 if (readyTex != 0 && srcW > 0 && srcH > 0) {
                     PROFILE_SCOPE_CAT("RT EyeZoom Render", "Render Thread");
