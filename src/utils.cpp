@@ -841,6 +841,7 @@ void EnsureSymbolsInitialized() {
     ssAddr << "Detected DLL loaded at address: 0x" << std::hex << dllBaseAddr;
     Log(ssAddr.str());
     return;
+    /*
 
     DWORD options = SymGetOptions();
     options |= SYMOPT_LOAD_LINES;
@@ -873,7 +874,7 @@ void EnsureSymbolsInitialized() {
     } else {
         g_symbolsInitialized.store(true);
         Log("SUCCESS: Symbols loaded manually from Toolscreen.pdb mapped to Toolscreen memory.");
-    }
+    }*/
 }
 
 void InstallGlobalExceptionHandlers() {
