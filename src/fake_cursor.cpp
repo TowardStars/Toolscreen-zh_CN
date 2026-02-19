@@ -19,6 +19,16 @@ static std::wstring ResolveCwdPath(const std::wstring& relPath) {
 
 namespace CursorTextures {
 
+static void DestroyCursorOrIcon(HCURSOR handle, UINT loadType) {
+    if (!handle) return;
+    // HCURSOR/HICON are compatible handle types, but the correct destroy API depends on creation type.
+    if (loadType == IMAGE_ICON) {
+        DestroyIcon(reinterpret_cast<HICON>(handle));
+    } else {
+        DestroyCursor(handle);
+    }
+}
+
 // Cursor definition: maps cursor name to file path and load type
 struct CursorDef {
     std::string name;
@@ -165,6 +175,10 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
     outData.loadType = loadType;
 
     // Load cursor/icon from file with explicit size
+    // NOTE: For .cur/.ico files with multiple embedded sizes, LoadImageW may return the nearest available
+    // bitmap (often multiples of 8) rather than the exact requested size. That can make OBS/virtual-camera
+    // rendering look wrong when the user picks a size that isn't an embedded variant.
+    // CopyImage() is used below to force the handle to the exact requested size.
     HCURSOR hCursor = (HCURSOR)LoadImageW(NULL, resolvedPath.c_str(), loadType, size, size, LR_LOADFROMFILE | LR_DEFAULTSIZE);
     if (!hCursor) {
         DWORD err = GetLastError();
@@ -197,6 +211,22 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
         return false;
     }
 
+    // Force an exact-size handle so the bitmap we extract matches the configured size.
+    // (Without this, Windows may pick the nearest embedded variant.)
+    if (size > 0) {
+        HANDLE scaled = CopyImage(reinterpret_cast<HANDLE>(hCursor), loadType, size, size, 0);
+        if (scaled) {
+            HCURSOR hScaled = reinterpret_cast<HCURSOR>(scaled);
+            if (hScaled != hCursor) {
+                DestroyCursorOrIcon(hCursor, loadType);
+                hCursor = hScaled;
+            }
+        } else {
+            LogCategory("cursor_textures", "[CursorTextures] WARNING: CopyImage failed to force size to " + std::to_string(size) +
+                                               "px for " + pathStr + " (err=" + std::to_string(GetLastError()) + ")");
+        }
+    }
+
     outData.hCursor = hCursor;
 
     // Get icon info
@@ -207,7 +237,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
     if (!hasIconInfoEx) {
         DWORD err = GetLastError();
         LogCategory("cursor_textures", "[CursorTextures] ERROR: GetIconInfoExW failed with error " + std::to_string(err));
-        DestroyCursor(hCursor);
+        DestroyCursorOrIcon(hCursor, loadType);
         outData.hCursor = nullptr;
         return false;
     }
@@ -220,7 +250,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
     if (isMonochrome) {
         if (!iconInfoEx.hbmMask) {
             LogCategory("cursor_textures", "[CursorTextures] ERROR: Monochrome cursor has no mask bitmap");
-            DestroyCursor(hCursor);
+            DestroyCursorOrIcon(hCursor, loadType);
             outData.hCursor = nullptr;
             return false;
         }
@@ -228,7 +258,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
             DWORD err = GetLastError();
             LogCategory("cursor_textures", "[CursorTextures] ERROR: GetObject for mask bitmap failed with error " + std::to_string(err));
             DeleteObject(iconInfoEx.hbmMask);
-            DestroyCursor(hCursor);
+            DestroyCursorOrIcon(hCursor, loadType);
             outData.hCursor = nullptr;
             return false;
         }
@@ -238,7 +268,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
             LogCategory("cursor_textures", "[CursorTextures] ERROR: GetObject for color bitmap failed with error " + std::to_string(err));
             if (iconInfoEx.hbmMask) DeleteObject(iconInfoEx.hbmMask);
             if (iconInfoEx.hbmColor) DeleteObject(iconInfoEx.hbmColor);
-            DestroyCursor(hCursor);
+            DestroyCursorOrIcon(hCursor, loadType);
             outData.hCursor = nullptr;
             return false;
         }
@@ -253,7 +283,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
                     "[CursorTextures] ERROR: Invalid bitmap dimensions: " + std::to_string(width) + "x" + std::to_string(height));
         if (iconInfoEx.hbmMask) DeleteObject(iconInfoEx.hbmMask);
         if (iconInfoEx.hbmColor) DeleteObject(iconInfoEx.hbmColor);
-        DestroyCursor(hCursor);
+        DestroyCursorOrIcon(hCursor, loadType);
         outData.hCursor = nullptr;
         return false;
     }
@@ -275,7 +305,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
         LogCategory("cursor_textures", "[CursorTextures] ERROR: GetDC(NULL) failed with error " + std::to_string(err));
         if (iconInfoEx.hbmMask) DeleteObject(iconInfoEx.hbmMask);
         if (iconInfoEx.hbmColor) DeleteObject(iconInfoEx.hbmColor);
-        DestroyCursor(hCursor);
+        DestroyCursorOrIcon(hCursor, loadType);
         outData.hCursor = nullptr;
         return false;
     }
@@ -287,7 +317,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
         ReleaseDC(NULL, hdcScreen);
         if (iconInfoEx.hbmMask) DeleteObject(iconInfoEx.hbmMask);
         if (iconInfoEx.hbmColor) DeleteObject(iconInfoEx.hbmColor);
-        DestroyCursor(hCursor);
+        DestroyCursorOrIcon(hCursor, loadType);
         outData.hCursor = nullptr;
         return false;
     }
@@ -476,7 +506,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
     glGenTextures(1, &outData.texture);
     if (outData.texture == 0) {
         LogCategory("cursor_textures", "[CursorTextures] ERROR: glGenTextures returned 0 - OpenGL context may not be valid");
-        DestroyCursor(outData.hCursor);
+        DestroyCursorOrIcon(outData.hCursor, outData.loadType);
         outData.hCursor = nullptr;
         return false;
     }
@@ -516,7 +546,7 @@ static bool LoadSingleCursor(const std::wstring& path, UINT loadType, int size, 
             glDeleteTextures(1, &outData.invertMaskTexture);
             outData.invertMaskTexture = 0;
         }
-        DestroyCursor(outData.hCursor);
+        DestroyCursorOrIcon(outData.hCursor, outData.loadType);
         outData.hCursor = nullptr;
         return false;
     }
@@ -1014,7 +1044,7 @@ void Cleanup() {
             invertMasksDeleted++;
         }
         if (cursor.hCursor) {
-            DestroyCursor(cursor.hCursor);
+            DestroyCursorOrIcon(cursor.hCursor, cursor.loadType);
             cursor.hCursor = nullptr;
             cursorsDestroyed++;
         }
