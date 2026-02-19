@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <set>
 #include <thread>
+#include <fstream>
 
 // ImGui includes for render thread
 #include "include/imgui/backends/imgui_impl_opengl3.h"
@@ -200,13 +201,56 @@ static bool g_fontsValid = false; // True when font atlas is built and texture i
 // Font loading can fail or behave inconsistently with some font files.
 // We treat any font that can't be built reliably as invalid and fall back to Arial.
 static bool RT_IsFontStable(const std::string& fontPath, float sizePixels) {
+    (void)sizePixels;
     if (fontPath.empty()) return false;
 
-    // Build in a temporary atlas so a broken font doesn't poison the real atlas.
-    ImFontAtlas testAtlas;
-    ImFont* testFont = testAtlas.AddFontFromFileTTF(fontPath.c_str(), sizePixels);
-    if (!testFont) return false;
-    return testAtlas.Build();
+    // IMPORTANT:
+    // ImFontAtlas::AddFontFromFileTTF() will emit error log entries via ImGui::ErrorLog().
+    // That path can call ImGui::Begin() which is unsafe before a NewFrame() has happened and
+    // can crash in release builds. Therefore, RT_IsFontStable must NOT call AddFontFromFileTTF.
+    //
+    // Do a lightweight font-file sanity check without calling into ImGui or stb_truetype.
+    // This avoids unresolved externals when stb_truetype is compiled out (e.g. FreeType build),
+    // and avoids invoking ImGui's error UI before a NewFrame().
+    const DWORD attrs = GetFileAttributesA(fontPath.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        return false;
+    }
+
+    std::ifstream f(fontPath, std::ios::binary);
+    if (!f) return false;
+
+    unsigned char sig[4] = { 0, 0, 0, 0 };
+    f.read(reinterpret_cast<char*>(sig), sizeof(sig));
+    if (!f) return false;
+
+    // Known sfnt/OTF container signatures.
+    // - 0x00010000 : TrueType
+    // - 'OTTO'     : OpenType CFF
+    // - 'ttcf'     : TrueType Collection
+    // - 'true'     : TrueType (Apple)
+    // - 'typ1'     : PostScript Type 1
+    const unsigned char ttfSig[4] = { 0x00, 0x01, 0x00, 0x00 };
+    if (memcmp(sig, ttfSig, 4) == 0) return true;
+    if (memcmp(sig, "OTTO", 4) == 0) return true;
+    if (memcmp(sig, "ttcf", 4) == 0) return true;
+    if (memcmp(sig, "true", 4) == 0) return true;
+    if (memcmp(sig, "typ1", 4) == 0) return true;
+
+    return false;
+}
+
+static ImFont* RT_SafeAddFontFromFileTTF(ImFontAtlas* atlas, const char* path, float sizePixels,
+                                        const ImFontConfig* fontCfg = nullptr, const ImWchar* glyphRanges = nullptr) {
+    if (!atlas || !path || !path[0]) return nullptr;
+    ImFont* font = nullptr;
+    // Guard against AVs from malformed font files.
+    __try {
+        font = atlas->AddFontFromFileTTF(path, sizePixels, fontCfg, glyphRanges);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        font = nullptr;
+    }
+    return font;
 }
 
 static ImFont* RT_AddFontWithArialFallback(ImFontAtlas* atlas, const std::string& requestedPath, float sizePixels, const char* what,
@@ -219,7 +263,7 @@ static ImFont* RT_AddFontWithArialFallback(ImFontAtlas* atlas, const std::string
 
     // 1) Requested font (if stable)
     if (!requestedPath.empty() && RT_IsFontStable(requestedPath, sizePixels)) {
-        if (ImFont* f = atlas->AddFontFromFileTTF(requestedPath.c_str(), sizePixels)) {
+        if (ImFont* f = RT_SafeAddFontFromFileTTF(atlas, requestedPath.c_str(), sizePixels)) {
             setUsed(requestedPath);
             return f;
         }
@@ -229,7 +273,7 @@ static ImFont* RT_AddFontWithArialFallback(ImFontAtlas* atlas, const std::string
     const std::string& arial = ConfigDefaults::CONFIG_FONT_PATH;
     if (RT_IsFontStable(arial, sizePixels)) {
         Log(std::string("Render Thread: Falling back to Arial for ") + what);
-        if (ImFont* f = atlas->AddFontFromFileTTF(arial.c_str(), sizePixels)) {
+        if (ImFont* f = RT_SafeAddFontFromFileTTF(atlas, arial.c_str(), sizePixels)) {
             setUsed(arial);
             return f;
         }

@@ -840,6 +840,9 @@ void EnsureSymbolsInitialized() {
     std::stringstream ssAddr;
     ssAddr << "Detected DLL loaded at address: 0x" << std::hex << dllBaseAddr;
     Log(ssAddr.str());
+    // Mark initialized so we don't spam this on every call.
+    // (The rest of the symbol loading logic is currently disabled below.)
+    g_symbolsInitialized.store(true);
     return;
     /*
 

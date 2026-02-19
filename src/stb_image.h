@@ -5735,6 +5735,18 @@ static void *stbi__bmp_load(stbi__context *s, int *x, int *y, int *comp, int req
 // Targa Truevision - TGA
 // by Jonathan Dummer
 #ifndef STBI_NO_TGA
+// C++ Core Guidelines ES.78: annotate intentional fallthrough in switches.
+// (MSVC Code Analysis doesn't consistently accept comments like // fallthrough)
+#ifndef STBI__FALLTHROUGH
+   // MSVC doesn't always set __cplusplus correctly unless /Zc:__cplusplus is enabled.
+   // Prefer _MSC_VER gate so Code Analysis sees a real fallthrough annotation.
+   #if (defined(_MSC_VER) && _MSC_VER >= 1910) || (defined(__cplusplus) && (__cplusplus >= 201703L))
+      #define STBI__FALLTHROUGH [[fallthrough]]
+   #else
+      #define STBI__FALLTHROUGH
+   #endif
+#endif
+
 // returns STBI_rgb or whatever, 0 on error
 static int stbi__tga_get_comp(int bits_per_pixel, int is_grey, int* is_rgb16)
 {
@@ -5743,10 +5755,10 @@ static int stbi__tga_get_comp(int bits_per_pixel, int is_grey, int* is_rgb16)
    switch(bits_per_pixel) {
       case 8:  return STBI_grey;
       case 16: if(is_grey) return STBI_grey_alpha;
-               // fallthrough
+                      STBI__FALLTHROUGH;
       case 15: if(is_rgb16) *is_rgb16 = 1;
                return STBI_rgb;
-      case 24: // fallthrough
+         case 24: STBI__FALLTHROUGH;
       case 32: return bits_per_pixel/8;
       default: return 0;
    }
@@ -6957,6 +6969,7 @@ static void *stbi__load_gif_main_outofmem(stbi__gif *g, stbi_uc *out, int **dela
 
    if (out) STBI_FREE(out);
    if (delays && *delays) STBI_FREE(*delays);
+   STBI_FREE(g);
    return stbi__errpuc("outofmem", "Out of memory");
 }
 
@@ -6967,7 +6980,7 @@ static void *stbi__load_gif_main(stbi__context *s, int **delays, int *x, int *y,
       stbi_uc *u = 0;
       stbi_uc *out = 0;
       stbi_uc *two_back = 0;
-      stbi__gif g;
+   stbi__gif* g = (stbi__gif*) stbi__malloc(sizeof(stbi__gif));
       int stride;
       int out_size = 0;
       int delays_size = 0;
@@ -6975,25 +6988,28 @@ static void *stbi__load_gif_main(stbi__context *s, int **delays, int *x, int *y,
       STBI_NOTUSED(out_size);
       STBI_NOTUSED(delays_size);
 
-      memset(&g, 0, sizeof(g));
+      if (!g) {
+         return stbi__errpuc("outofmem", "Out of memory");
+      }
+      memset(g, 0, sizeof(*g));
       if (delays) {
          *delays = 0;
       }
 
       do {
-         u = stbi__gif_load_next(s, &g, comp, req_comp, two_back);
+         u = stbi__gif_load_next(s, g, comp, req_comp, two_back);
          if (u == (stbi_uc *) s) u = 0;  // end of animated gif marker
 
          if (u) {
-            *x = g.w;
-            *y = g.h;
+            *x = g->w;
+            *y = g->h;
             ++layers;
-            stride = g.w * g.h * 4;
+            stride = g->w * g->h * 4;
 
             if (out) {
                void *tmp = (stbi_uc*) STBI_REALLOC_SIZED( out, out_size, layers * stride );
                if (!tmp)
-                  return stbi__load_gif_main_outofmem(&g, out, delays);
+                  return stbi__load_gif_main_outofmem(g, out, delays);
                else {
                    out = (stbi_uc*) tmp;
                    out_size = layers * stride;
@@ -7002,19 +7018,19 @@ static void *stbi__load_gif_main(stbi__context *s, int **delays, int *x, int *y,
                if (delays) {
                   int *new_delays = (int*) STBI_REALLOC_SIZED( *delays, delays_size, sizeof(int) * layers );
                   if (!new_delays)
-                     return stbi__load_gif_main_outofmem(&g, out, delays);
+                     return stbi__load_gif_main_outofmem(g, out, delays);
                   *delays = new_delays;
                   delays_size = layers * sizeof(int);
                }
             } else {
                out = (stbi_uc*)stbi__malloc( layers * stride );
                if (!out)
-                  return stbi__load_gif_main_outofmem(&g, out, delays);
+                  return stbi__load_gif_main_outofmem(g, out, delays);
                out_size = layers * stride;
                if (delays) {
                   *delays = (int*) stbi__malloc( layers * sizeof(int) );
                   if (!*delays)
-                     return stbi__load_gif_main_outofmem(&g, out, delays);
+                     return stbi__load_gif_main_outofmem(g, out, delays);
                   delays_size = layers * sizeof(int);
                }
             }
@@ -7024,19 +7040,20 @@ static void *stbi__load_gif_main(stbi__context *s, int **delays, int *x, int *y,
             }
 
             if (delays) {
-               (*delays)[layers - 1U] = g.delay;
+               (*delays)[layers - 1U] = g->delay;
             }
          }
       } while (u != 0);
 
-      // free temp buffer;
-      STBI_FREE(g.out);
-      STBI_FREE(g.history);
-      STBI_FREE(g.background);
-
       // do the final conversion after loading everything;
       if (req_comp && req_comp != 4)
-         out = stbi__convert_format(out, 4, req_comp, layers * g.w, g.h);
+         out = stbi__convert_format(out, 4, req_comp, layers * g->w, g->h);
+
+      // free temp buffer;
+      STBI_FREE(g->out);
+      STBI_FREE(g->history);
+      STBI_FREE(g->background);
+      STBI_FREE(g);
 
       *z = layers;
       return out;
@@ -7048,28 +7065,30 @@ static void *stbi__load_gif_main(stbi__context *s, int **delays, int *x, int *y,
 static void *stbi__gif_load(stbi__context *s, int *x, int *y, int *comp, int req_comp, stbi__result_info *ri)
 {
    stbi_uc *u = 0;
-   stbi__gif g;
-   memset(&g, 0, sizeof(g));
+   stbi__gif* g = (stbi__gif*) stbi__malloc(sizeof(stbi__gif));
+   if (!g) return stbi__errpuc("outofmem", "Out of memory");
+   memset(g, 0, sizeof(*g));
    STBI_NOTUSED(ri);
 
-   u = stbi__gif_load_next(s, &g, comp, req_comp, 0);
+   u = stbi__gif_load_next(s, g, comp, req_comp, 0);
    if (u == (stbi_uc *) s) u = 0;  // end of animated gif marker
    if (u) {
-      *x = g.w;
-      *y = g.h;
+      *x = g->w;
+      *y = g->h;
 
       // moved conversion to after successful load so that the same
       // can be done for multiple frames.
       if (req_comp && req_comp != 4)
-         u = stbi__convert_format(u, 4, req_comp, g.w, g.h);
-   } else if (g.out) {
+         u = stbi__convert_format(u, 4, req_comp, g->w, g->h);
+   } else if (g->out) {
       // if there was an error and we allocated an image buffer, free it!
-      STBI_FREE(g.out);
+      STBI_FREE(g->out);
    }
 
    // free buffers needed for multiple frame loading;
-   STBI_FREE(g.history);
-   STBI_FREE(g.background);
+   STBI_FREE(g->history);
+   STBI_FREE(g->background);
+   STBI_FREE(g);
 
    return u;
 }
@@ -7145,10 +7164,10 @@ static void stbi__hdr_convert(float *output, stbi_uc *input, int req_comp)
       if (req_comp == 4) output[3] = 1;
    } else {
       switch (req_comp) {
-         case 4: output[3] = 1; /* fallthrough */
+         case 4: output[3] = 1; STBI__FALLTHROUGH;
          case 3: output[0] = output[1] = output[2] = 0;
                  break;
-         case 2: output[1] = 1; /* fallthrough */
+         case 2: output[1] = 1; STBI__FALLTHROUGH;
          case 1: output[0] = 0;
                  break;
       }
