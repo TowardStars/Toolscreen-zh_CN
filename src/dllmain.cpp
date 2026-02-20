@@ -1054,8 +1054,8 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
             if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
                 // Use accumulators to preserve fractional movements that would otherwise be lost
                 // This prevents small movements from being truncated to zero with sub-1.0 sensitivity
-                static thread_local float xAccum = 0.0f;
-                static thread_local float yAccum = 0.0f;
+                static float xAccum = 0.0f;
+                static float yAccum = 0.0f;
 
                 // Add scaled movement to accumulator
                 xAccum += raw->data.mouse.lLastX * sensitivityX;
